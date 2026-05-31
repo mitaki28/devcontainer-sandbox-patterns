@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gcp": {
+      "type": "http",
+      "url": "http://proxy:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${PROXY_TOKEN}"
+      }
+    }
+  }
+}

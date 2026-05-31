@@ -1,0 +1,6 @@
+{
+  "name": "ingress-single-workspace",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace"
+}

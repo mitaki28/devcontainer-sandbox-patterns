@@ -1,0 +1,40 @@
+{
+	auto_https off
+	admin off
+}
+
+# task 用 wildcard: <task>.devsbx.localhost → <task>-workspace:3000
+#
+# Caddy v2 に host_regexp matcher は存在しないため、header_regexp で Host header を
+# 直接マッチする。`header_regexp <key> <header> <regex>` の <key> は capture group の
+# 参照名で、{re.<key>.<group>} 形式で展開可能。
+#
+# 注: header_regexp は raw な Host を取るため、ブラウザが付ける port suffix
+# (`Host: foo.devsbx.localhost:8080`) も許容するよう (?::\d+)? を末尾に付ける必要がある
+# (host matcher は port を勝手に strip するが、header_regexp は strip しない)。
+#
+# workspace 起動 = Docker DNS で <task>-workspace が resolve 可、
+# 停止 = upstream unreachable で 502。Caddy 設定の動的更新は不要。
+:80 {
+	@task header_regexp host Host ^(?P<name>[a-z0-9-]+)\.devsbx\.localhost(?::\d+)?$
+	handle @task {
+		reverse_proxy {re.host.name}-workspace:3000
+	}
+
+	# 名前付き port (利用者が静的に追加): app./api.
+	# Host: app.<task>.devsbx.localhost → <task>-workspace:3000
+	# Host: api.<task>.devsbx.localhost → <task>-workspace:4000
+	@app header_regexp app Host ^app\.(?P<name>[a-z0-9-]+)\.devsbx\.localhost(?::\d+)?$
+	handle @app {
+		reverse_proxy {re.app.name}-workspace:3000
+	}
+	@api header_regexp api Host ^api\.(?P<name>[a-z0-9-]+)\.devsbx\.localhost(?::\d+)?$
+	handle @api {
+		reverse_proxy {re.api.name}-workspace:4000
+	}
+
+	# 未マッチの host は明示的に 404。誤って全 host を流さない。
+	handle {
+		respond "no route for host: {host}" 404
+	}
+}

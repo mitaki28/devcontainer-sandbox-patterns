@@ -1,0 +1,64 @@
+# smoke 専用 stack。production の compose.yaml とは独立して立てる:
+#   docker compose -f test/compose.yaml up --build --abort-on-container-exit smoke
+#
+# 攻撃的なトラフィック (CONNECT 詐称等) を打つため、production stack と
+# compose project ごと完全に分離する。proxy の Dockerfile.squid / squid.conf は
+# build context (../) 共有で production と同一物を参照し、構成が乖離しない。
+# allowed-hosts.txt は smoke 用 (mock-target.test のみ) を bind mount で差し替える。
+#
+# external-net も internal: true にしているため、smoke 中の正常系 / 詐称試行は
+# 一切外部に到達しない (mock-target.test は RFC 6761 で予約された .test TLD)。
+services:
+  proxy:
+    build:
+      context: ..
+      dockerfile: Dockerfile.squid
+    image: simple-http-proxy-squid:dev
+    volumes:
+      - ./allowed-hosts.smoke.txt:/etc/squid/allowed-hosts.txt:ro
+    networks:
+      - internal-net
+      - external-net
+
+  mock-target:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    volumes:
+      - mock-certs:/certs
+    networks:
+      external-net:
+        aliases:
+          - mock-target.test
+
+  smoke:
+    image: oven/bun:1@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e
+    working_dir: /app
+    volumes:
+      - .:/app/test:ro
+      - mock-certs:/certs:ro
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      NO_PROXY: ""
+      NODE_EXTRA_CA_CERTS: /certs/mock-target.crt
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while [ ! -f /certs/.ready ]; do sleep 0.1; done
+        exec bun test test/network-smoke.test.ts
+    networks:
+      - internal-net
+    depends_on:
+      - proxy
+      - mock-target
+
+networks:
+  internal-net:
+    internal: true
+  external-net:
+    internal: true
+
+volumes:
+  mock-certs:

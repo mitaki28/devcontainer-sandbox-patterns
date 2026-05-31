@@ -1,0 +1,6 @@
+{
+  "name": "fetch-mcp",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace"
+}

@@ -1,0 +1,65 @@
+# gcloud-mcp + mcp-proxy の単一 image。
+#
+# 構成:
+#   - mcp-proxy をバイナリビルド（既存 lib/mcp-proxy/Dockerfile.binary と同じやり方）
+#   - google-cloud-sdk:slim をベースに、Node + pnpm を追加
+#   - .npmrc の minimum-release-age 設定下で gcloud-mcp を build-time install
+#   - runtime は pnpm exec で local node_modules から直起動（ネット不要）
+#
+# build context は **リポジトリ root** を期待する（compose.yaml で context: ../../../）。
+# lib/mcp-proxy/ ソースと recipes/cloud-mcp-with-short-lived-credential/.npmrc の両方を参照するため。
+
+# ----- Stage 1: mcp-proxy バイナリ -----
+# build platform 上で動かす（クロスコンパイル）。
+# Stage 2 の base である google/cloud-sdk:slim は arm64 manifest を持たないため、
+# 全体を linux/amd64 にそろえる。--target=bun-linux-x64 で明示的に amd64 バイナリを出す。
+FROM --platform=linux/amd64 oven/bun:1@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e AS proxy-builder
+
+WORKDIR /app
+COPY lib/mcp-proxy/package.json lib/mcp-proxy/bun.lock lib/mcp-proxy/bunfig.toml ./
+RUN bun install --frozen-lockfile
+COPY lib/mcp-proxy/tsconfig.json ./
+COPY lib/mcp-proxy/src ./src
+
+RUN bun build src/index.ts --compile --target=bun-linux-x64 --outfile /out/mcp-proxy
+
+# ----- Stage 2: gcloud SDK + Node + pnpm + warmed gcloud-mcp -----
+FROM --platform=linux/amd64 google/cloud-sdk:slim@sha256:42d0af3434d40a895da768a87001b87938c3ff2a0f16c81a00e78b857b75b611
+
+# Node 20 + pnpm のインストール。
+# pnpm version は他 recipe（alternatives/dependencies-build-time/）と揃えて 10.33.2。
+# minimum-release-age は pnpm 10.16+ で利用可能。
+ARG PNPM_VERSION=10.33.2
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+       > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g pnpm@${PNPM_VERSION} \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=proxy-builder /out/mcp-proxy /usr/local/bin/mcp-proxy
+
+# gcloud-mcp は package.json で pin する（version は package.json と pnpm-lock.yaml に固定）。
+# 上げる際は npm 上の公開日を確認し、minimum-release-age を超えていることを確認すること。
+WORKDIR /opt/gcp-mcp
+COPY recipes/cloud-mcp-with-short-lived-credential/.npmrc ./.npmrc
+COPY recipes/cloud-mcp-with-short-lived-credential/package.json recipes/cloud-mcp-with-short-lived-credential/pnpm-lock.yaml ./
+
+# build-time に install して runtime はネット不要にする。
+# --frozen-lockfile で lockfile と package.json の不整合があれば build を失敗させる
+# （AI agent が version を勝手にずらすのを防ぐ）。
+RUN pnpm install --frozen-lockfile
+
+# 後段で `pnpm exec gcloud-mcp` または `/opt/gcp-mcp/node_modules/.bin/gcloud-mcp` で起動できる。
+
+# gcloud CLI が AI 用途で意味のないコマンドや interactive セッションを開始しないよう、
+# gcloud-mcp 側で既定で deny されている。本 image では追加の gcloud config はしない
+# （recipe ごとに impersonation の設定方法が異なるため、各 compose.yaml で env / volume で渡す）。
+
+EXPOSE 8000
+ENTRYPOINT ["mcp-proxy"]

@@ -1,0 +1,21 @@
+{
+  "_doc_top": "integrated/single-workspace/ の mitm-proxy policy。lib/mitm-proxy/addons/ の config.py が POLICY_FILE 経由で読む。`_doc*` キーは無視される。",
+  "_doc_trusted_hosts": "Claude Code 自身の egress。method ACL skip で全 method 素通し。",
+  "_doc_readonly_hosts": "GET/HEAD/OPTIONS のみ通す read-only な許可 bucket。github.com / codeload.github.com への git transport は recipes/git-gateway/ 経由が前提のため、ここでは含めない (workspace の gitconfig insteadOf で git-gateway に書き換わる)。api.github.com は REST 用の anonymous GET 用途で残置 (PAT 注入なし、GitHub MCP が主経路)。",
+  "_doc_header_inject": "header_inject エントリは host + path + method + query 一致で headers を付ける汎用機構。default では空。",
+  "trusted_hosts": [
+    "api.anthropic.com",
+    "claude.ai",
+    "platform.claude.com",
+    "downloads.claude.ai",
+    "bridge.claudeusercontent.com"
+  ],
+  "readonly_hosts": [
+    "api.github.com",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "*.githubusercontent.com",
+    "registry.npmjs.org"
+  ],
+  "header_inject": []
+}

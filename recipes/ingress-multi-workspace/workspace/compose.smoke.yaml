@@ -1,0 +1,21 @@
+# smoke test 用 override。
+# 通常の workspace は base devcontainer image で port 3000 で何も listen していない。
+# smoke では python3 標準ライブラリの http.server を 3000 と 4000 で並列に立て、
+# 各 task の workspace と各 port を区別できるよう PROJECT 名 + port をレスポンスに含める。
+# 3000 は @task / @app、4000 は @api ハンドラの routing 検証に使う。
+services:
+  workspace:
+    image: python:3-alpine@sha256:dd4d2bd5b53d9b25a51da13addf2be586beebd5387e289e798e4083d94ca837a
+    working_dir: /workspace
+    # 3000 / 4000 をそれぞれ別 directory で listen させて、curl 内容で port を区別できるようにする。
+    # 3000 は background 起動し、4000 を foreground 起動して PID 1 として exec で握る。
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mkdir -p /workspace/p3000 /workspace/p4000
+        echo "workspace: ${COMPOSE_PROJECT_NAME} port: 3000" > /workspace/p3000/index.html
+        echo "workspace: ${COMPOSE_PROJECT_NAME} port: 4000" > /workspace/p4000/index.html
+        (cd /workspace/p3000 && python3 -m http.server 3000) &
+        cd /workspace/p4000 && exec python3 -m http.server 4000

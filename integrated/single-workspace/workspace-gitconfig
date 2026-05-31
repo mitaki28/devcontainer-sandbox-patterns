@@ -1,0 +1,13 @@
+# workspace の system-wide gitconfig.
+# github.com への全 git 操作 (fetch / push / clone) を recipe 内の git-gateway に転送する。
+# git-gateway 側で per-repo Location が:
+#   - 登録 repo (ALLOWED_REPOS): fetch を上流 (github.com) に reverse-proxy + PAT 注入、
+#                                 push は内部 git-http-backend + pre-receive で上流転送
+#   - 未登録 repo: anonymous fetch passthrough のみ、push は 403
+# 詳細は recipes/git-gateway/README.md 参照。
+
+[url "http://git-gateway:8080/"]
+    insteadOf = https://github.com/
+
+[safe]
+    directory = *

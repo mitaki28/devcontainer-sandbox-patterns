@@ -1,0 +1,76 @@
+services:
+  workspace:
+    build:
+      context: .
+      dockerfile: workspace/Dockerfile
+    image: dependencies-build-time-workspace:dev
+    command: sleep infinity
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:cached
+      # node_modules は image に焼いた状態を保つため named volume で保護する。
+      # bind mount の host 側空ディレクトリで上書きされるのを防ぐ。
+      - workspace_node_modules:/workspace/node_modules
+    networks:
+      - internal
+    # 注: workspace は internal にしか居ない。
+    # registry / 外部 host への egress は Docker ネットワーク設定で塞がれる。
+    # 注: GITHUB_PAT 等の認証情報は意図的に渡さない（本レシピは認証付き registry を扱わない）。
+
+  dep-update:
+    build:
+      context: ./dep-update
+    image: dependencies-build-time-dep-update:dev
+    # profiles で通常起動から外す。
+    # `docker compose up` では起動せず、`docker compose run --rm dep-update ...` で
+    # ad-hoc に起動する形に強制する。AI agent から偶発的に起動されないようにする狙い。
+    profiles: [tools]
+    working_dir: /work
+    volumes:
+      # フルマウント。
+      # pnpm は lockfile を `pnpm-lock.yaml.<rand>` → `pnpm-lock.yaml` の atomic rename
+      # で書くため、`./pnpm-lock.yaml:/work/pnpm-lock.yaml` のような個別ファイル
+      # bind mount だと EBUSY で失敗する。ディレクトリ単位でマウントする必要がある。
+      # 「コードすら抜かれない最小マウント」は概念上の理想だが本構成では成立しない（README 参照）。
+      - .:/work:cached
+      # pnpm の content-addressable store。ただのキャッシュ（再生成可能）なので
+      # named volume で十分。
+      - dep_update_pnpm_store:/pnpm-store
+    environment:
+      # store-dir を named volume 上の固定 path に明示的に設定。
+      # 明示しないと pnpm が cross-filesystem fallback で `./.pnpm-store/` に
+      # local store を作って repo を汚す。
+      npm_config_store_dir: /pnpm-store
+      # bind mount (project) と named volume (store) は別 filesystem のため
+      # hardlink できない。pnpm に copy 戦略を取らせる。
+      npm_config_package_import_method: copy
+    networks:
+      - internal
+      - external
+    # 注: Docker socket は意図的に mount しない。
+    # workspace 側に socket があれば AI が dep-update を起動できてしまうため。
+
+  smoke:
+    build:
+      context: .
+      dockerfile: workspace/Dockerfile
+    image: dependencies-build-time-workspace:dev
+    entrypoint: ["/test/smoke.sh"]
+    working_dir: /workspace
+    volumes:
+      - ./test:/test:ro
+    networks:
+      - internal
+    # smoke は image の状態（node_modules 焼き込み）をそのまま観測したいので、
+    # workspace のような bind mount (.:/workspace) は当てない。
+
+networks:
+  internal:
+    # workspace と smoke がここにしか居ない。internal: true で外向き egress を Docker ネットワーク設定で塞ぐ。
+    internal: true
+  external:
+    # dep-update だけが居る側。registry への外向き経路 (外部疎通を持つ bridge)。
+
+volumes:
+  workspace_node_modules:
+  dep_update_pnpm_store:

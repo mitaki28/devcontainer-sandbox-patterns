@@ -1,0 +1,6 @@
+{
+  "name": "simple-http-proxy",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace"
+}

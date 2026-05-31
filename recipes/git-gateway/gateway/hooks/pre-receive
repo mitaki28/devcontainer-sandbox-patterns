@@ -1,0 +1,74 @@
+#!/bin/sh
+# git-gateway pre-receive hook.
+#
+# 入力: 標準入力に <old> SP <new> SP <ref> が ref 毎に 1 行ずつ。
+# 動作:
+#   1. ref allowlist / denylist で gate
+#   2. 上流 (git config push-gateway.upstream-url) に転送試行
+#      成功 → exit 0 → gateway の ref も update される (git の atomic 動作)
+#      失敗 → exit 1 → gateway ref は巻き戻る
+#
+# 注: 上流 push が成功した後に追加 check を挟まないこと。
+# 「上流は受理 + gateway は reject」という変なズレを発生させないため、
+# 「上流 push 成功 = pre-receive 成功」を不変条件にする。
+set -eu
+
+TARGET=$(git config --get push-gateway.upstream-url || true)
+if [ -z "$TARGET" ]; then
+    echo "[push-gateway] push-gateway.upstream-url is not configured on this repo" >&2
+    exit 1
+fi
+ALLOWED="${ALLOWED_REF_PATTERNS:-}"
+DENIED="${DENIED_REF_PATTERNS:-}"
+
+zero=0000000000000000000000000000000000000000
+
+# CSV の glob pattern と ref を照合
+match_csv() {
+    _ref="$1"
+    _csv="$2"
+    [ -z "$_csv" ] && return 1
+    _old_ifs=$IFS
+    IFS=','
+    # shellcheck disable=SC2086
+    set -- $_csv
+    IFS=$_old_ifs
+    for _pat in "$@"; do
+        # shellcheck disable=SC2254
+        case "$_ref" in
+            $_pat) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+while read -r old new ref; do
+    if match_csv "$ref" "$DENIED"; then
+        echo "[push-gateway] denied: $ref matches DENIED_REF_PATTERNS=$DENIED" >&2
+        exit 1
+    fi
+    if [ -n "$ALLOWED" ] && ! match_csv "$ref" "$ALLOWED"; then
+        echo "[push-gateway] denied: $ref does not match ALLOWED_REF_PATTERNS=$ALLOWED" >&2
+        exit 1
+    fi
+
+    echo "[push-gateway] forwarding $ref ($old -> $new) to $TARGET" >&2
+
+    # `--` で option terminator を明示。git server-side が pre-receive に渡す ref
+    # は通常 `refs/heads/...` 形式に validate 済みで、`--option` 始まりは構造的に
+    # 来ないが、git の ref 受理仕様や CGI 経路の取り回しが変わった場合の保険として、
+    # option として解釈される余地を構造的に塞いでおく。
+    if [ "$new" = "$zero" ]; then
+        if ! git push "$TARGET" --delete -- "$ref" 1>&2; then
+            echo "[push-gateway] delete failed for $ref on $TARGET" >&2
+            exit 1
+        fi
+    else
+        if ! git push "$TARGET" -- "${new}:${ref}" 1>&2; then
+            echo "[push-gateway] forward to $TARGET failed for $ref" >&2
+            echo "[push-gateway] remote may have advanced via another route; run 'git fetch && git rebase' against your fetch URL and retry" >&2
+            exit 1
+        fi
+    fi
+done
+exit 0

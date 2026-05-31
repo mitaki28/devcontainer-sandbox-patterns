@@ -1,0 +1,32 @@
+services:
+  fetch-mcp:
+    build:
+      context: .
+    image: fetch-mcp:dev
+    # ホストから手動 curl 用の port 公開（任意）。
+    # localhost bind なので外部からは到達しない。fetch-mcp は認証を要求しないため、
+    # ホスト側にこの port を晒すと localhost 上の他プロセスから認証なしで叩ける
+    # （同じ docker network 加入が実質的な認証）。
+    ports:
+      - "127.0.0.1:8830:8000"
+
+  smoke:
+    build:
+      context: .
+    image: fetch-mcp:dev
+    entrypoint: ["bun", "test", "test/fetch-smoke.test.ts"]
+    environment:
+      MCP_URL: http://fetch-mcp:8000/mcp
+    volumes:
+      - ./test:/app/test:ro
+    depends_on:
+      - fetch-mcp
+
+  workspace:
+    image: mcr.microsoft.com/devcontainers/base:trixie@sha256:e389149057371298eaeb72e736fc2c4dcb79974de222dd471d2e6d675d2f61c4
+    command: sleep infinity
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+    depends_on:
+      - fetch-mcp

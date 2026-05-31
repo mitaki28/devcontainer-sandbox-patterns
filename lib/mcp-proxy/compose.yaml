@@ -1,0 +1,10 @@
+# 各 smoke 単位の compose は test/smoke/<name>/compose.yaml に分離。
+# ここから include で取り込み、`docker compose run --rm --build <smoke>` で個別に走らせる。
+# 全 smoke を順に走らせる場合は `scripts/smoke-all.sh` を使う。
+include:
+  - test/smoke/echo/compose.yaml
+  - test/smoke/filter/compose.yaml
+  - test/smoke/sweep/compose.yaml
+  - test/smoke/provoke/compose.yaml
+  - test/smoke/bearer/compose.yaml
+  - test/smoke/oauth/compose.yaml

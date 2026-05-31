@@ -1,0 +1,48 @@
+# mock-upstream の静的 Caddyfile (smoke 専用)。
+# 動的に変わるのは smoke の invariant 検証用 matcher のみで、それは entrypoint が
+# /etc/caddy/mock-checks.caddy に書き出してここから import する。
+#
+# 役割:
+#   - MOCK_REPOS で init された bare repo に anonymous receive-pack も含めて service
+#   - smoke が gateway の PAT 注入 / strip 不変条件を検証できるよう、
+#     EXPECT_PAT_FOR_REPOS / FORBID_PAT_FOR_REPOS に応じた 401 challenge を返す
+#
+# 本番 (実 github.com) では mock-upstream service 自体が存在しない。
+
+{
+    auto_https off
+    admin off
+    log {
+        output stderr
+        format console
+    }
+}
+
+# anonymous receive-pack も含めて全部受ける fcgiwrap → git-http-backend block。
+(fcgiwrap_backend) {
+    reverse_proxy unix//run/fcgiwrap.sock {
+        transport fastcgi {
+            env SCRIPT_FILENAME /usr/libexec/git-core/git-http-backend
+            env SCRIPT_NAME ""
+            env PATH_INFO {http.request.uri.path}
+            env GIT_PROJECT_ROOT /srv/git
+            env GIT_HTTP_EXPORT_ALL 1
+        }
+    }
+}
+
+:8080 {
+    @health path /_health
+    handle @health {
+        respond "ok" 200
+    }
+
+    # smoke 用の Authorization 検証 (PAT 要求 / PAT 禁止)。entrypoint が生成。
+    # EXPECT_PAT も FORBID_PAT_FOR_REPOS も未設定なら空ファイルが import される (= noop)。
+    import /etc/caddy/mock-checks.caddy
+
+    # 上記 import の handler に拾われなかった全 path を anonymous で fcgiwrap に流す。
+    handle {
+        import fcgiwrap_backend
+    }
+}

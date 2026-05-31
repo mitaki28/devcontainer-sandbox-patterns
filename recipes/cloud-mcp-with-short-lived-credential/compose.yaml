@@ -1,0 +1,73 @@
+services:
+  proxy:
+    build:
+      context: ../..
+      dockerfile: recipes/cloud-mcp-with-short-lived-credential/Dockerfile.gcloud-mcp
+    image: gcp-mcp-proxy:bin
+    ports:
+      - "127.0.0.1:8821:8000"
+    env_file:
+      - path: ${HOME}/.config/devsbx/gcp-mcp.env
+        required: true
+      # workspace と共有する Bearer token (PROXY_TOKEN)。
+      - path: ${HOME}/.config/devsbx/mcp-proxy.env
+        required: true
+    volumes:
+      # ホスト側で `./refresh-token.sh` 実行 → sandbox SA の short-lived access token が
+      # この dir に書かれる。proxy はそのファイルだけを ro で読む。
+      # refresh token / 個人アカウント ADC は host 内に閉じ、container 側には届かない。
+      # create_host_path: false で「未作成だと起動失敗」させ、refresh-token.sh の
+      # 初回実行を fail loud に強制する。
+      - type: bind
+        source: ${HOME}/.cache/devsbx/gcp-mcp
+        target: /tokens
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      # 静的な値は environment にそのまま書ける。
+      # impersonation は host 側 refresh-token.sh で完了済みなので proxy では設定しない
+      # （二重 impersonation 防止）。IMPERSONATE_SERVICE_ACCOUNT は env_file 由来で
+      # proxy の env には入るが、--pass-env に挙げないため backend には渡らない。
+      CLOUDSDK_AUTH_ACCESS_TOKEN_FILE: /tokens/token
+    working_dir: /opt/gcp-mcp
+    # PROXY_TOKEN を引数に展開するため shell 経由で起動。
+    # mcp-proxy は stdio backend に proxy の env を丸ごと渡さない (PROXY_TOKEN 等の
+    # 漏洩防止)。gcloud-mcp が必要とする GCP 系 env だけを --pass-env で明示的に通す。
+    entrypoint: ["/bin/sh", "-c", "--"]
+    command:
+      - >
+        exec mcp-proxy --listen 0.0.0.0:8000
+        --token "$$PROXY_TOKEN"
+        --pass-env GOOGLE_CLOUD_PROJECT
+        --pass-env CLOUDSDK_CORE_PROJECT
+        --pass-env CLOUDSDK_AUTH_ACCESS_TOKEN_FILE
+        gcloud -- pnpm exec gcloud-mcp
+
+  smoke:
+    image: mcp-proxy:dev
+    build:
+      context: ../../lib/mcp-proxy
+    entrypoint: ["bun", "test", "test-recipes/smoke.test.ts"]
+    environment:
+      PROXY_URL: http://proxy:8000/mcp
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-proxy.env
+        required: true
+    volumes:
+      - ./test:/app/test-recipes:ro
+    depends_on:
+      - proxy
+
+  workspace:
+    image: mcr.microsoft.com/devcontainers/base:trixie@sha256:e389149057371298eaeb72e736fc2c4dcb79974de222dd471d2e6d675d2f61c4
+    command: sleep infinity
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+    # cloud credential は proxy のみ。workspace は PROXY_TOKEN のみで proxy を叩く。
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-proxy.env
+        required: true
+    depends_on:
+      - proxy

@@ -1,0 +1,6 @@
+# 注: 実値の env file は ~/.config/devsbx/mcp-github.env
+# に置く設計（compose.yaml 参照）。recipe ディレクトリ内には保存しないため、
+# 以下は保険的な除外。
+.env
+.env.local
+.env.*.local

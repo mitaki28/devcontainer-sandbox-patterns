@@ -1,0 +1,52 @@
+# 登録 repo (ALLOWED_REPOS の 1 entry) 用の Caddyfile テンプレ。
+# entrypoint.sh が envsubst で ${REPO} / ${IDX} / ${PAT_HEADER_LINE} を展開し、
+# /etc/caddy/per-repo/${IDX}.caddy として書き出す。テンプレ内の Caddy 構文
+# {$UPSTREAM_HOST_PART} は Caddy 起動時に展開される (envsubst は ${VAR} 形式
+# のみ展開するため、`{$VAR}` 形式とは衝突しない)。
+#
+# 受け付けるのは git smart HTTP の 4 エンドポイント:
+#   - push advertise: fcgiwrap → git-http-backend (内部 bare repo + pre-receive
+#     で上流転送 / ref ACL を評価)
+#   - push pack:      同上
+#   - fetch advertise: Authorization / Cookie を strip した上で PAT を再注入し、
+#     {$UPSTREAM_HOST_PART} に reverse_proxy
+#   - fetch pack:     同上
+# それ以外の (HTTP メソッド, パス) は Caddyfile.gateway 末尾の
+# `handle { respond 404 }` に吸収される。
+
+# ${REPO}
+@push_advertise_${IDX} {
+    path /${REPO}.git/info/refs
+    query service=git-receive-pack
+}
+handle @push_advertise_${IDX} {
+    import fcgiwrap_backend
+}
+
+@push_${IDX} path /${REPO}.git/git-receive-pack
+handle @push_${IDX} {
+    import fcgiwrap_backend
+}
+
+@fetch_advertise_${IDX} {
+    method GET
+    path /${REPO}.git/info/refs
+    query service=git-upload-pack
+}
+handle @fetch_advertise_${IDX} {
+    request_header -Authorization
+    request_header -Cookie
+${PAT_HEADER_LINE}
+    reverse_proxy {$UPSTREAM_HOST_PART}
+}
+
+@fetch_pack_${IDX} {
+    method POST
+    path /${REPO}.git/git-upload-pack
+}
+handle @fetch_pack_${IDX} {
+    request_header -Authorization
+    request_header -Cookie
+${PAT_HEADER_LINE}
+    reverse_proxy {$UPSTREAM_HOST_PART}
+}

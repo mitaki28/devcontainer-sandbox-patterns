@@ -1,0 +1,14 @@
+# regular mode の mitmproxy 用 image。
+#
+# 不変条件: proxy が load する addon コード / policy は image layer 経由で
+# のみ供給する。bind mount 由来にすると、workspace の rw マウントと同じホスト
+# ディレクトリを指してしまった場合に「監視される側が監視コードを編集できる」
+# 状態 (mitmproxy の -s スクリプトは hot reload) になり ACL が自己崩壊する。
+# addons / policy.example.json を build 時に COPY で焼き込むことで、workspace
+# 側の編集が proxy の実行に影響しない構造を保つ。
+#
+
+FROM mitmproxy/mitmproxy@sha256:f4f0f41f5278f284fcc0a306f82849f38ab2e133c1d71d25a42bd06d7ff6928b
+
+COPY addons /addons
+COPY policy.example.json /etc/mitm-proxy/policy.json

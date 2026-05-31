@@ -1,0 +1,26 @@
+{
+  "_doc_top": "lib/mitm-proxy/test/ smoke 専用 policy。test/compose.yaml が /etc/mitm-proxy/policy.json として bind mount で差し替える。production の policy.example.json と同型だが、smoke から実 host への egress を断つため、Docker network alias で受ける .test TLD (RFC 6761 予約、実 DNS では resolve しない) の仮想 host だけを並べてある。`_doc*` は読み飛ばされるコメント。",
+  "_doc_aliases": "alias の役割: api.test / registry.test = readonly exact (GET allow)、echo.test = readonly exact (httpbin 役、allow_rules と header_inject の target)、raw.content.test = readonly glob (*.content.test) の match 確認、denied.test = 一般 default deny、git.test = git transport が gateway 経由前提のため readonly に入れない (= default deny)。",
+  "trusted_hosts": [],
+  "readonly_hosts": [
+    "api.test",
+    "registry.test",
+    "echo.test",
+    "*.content.test"
+  ],
+  "allow_rules": [
+    {
+      "_doc": "allow_rules が readonly_hosts より先に評価されることを smoke で検証する用。host = echo.test は readonly_hosts に居るが、/anything/foo への POST はここで個別に許可されて mock の echo まで届く。",
+      "host": "echo.test",
+      "path": "/anything/foo",
+      "method": "POST"
+    }
+  ],
+  "header_inject": [
+    {
+      "_doc": "HeaderInjector が機能していることを smoke で検証する用。mock の /headers が request headers を JSON で echo back するので、注入された X-Mitm-Proxy-Test が見えれば OK。",
+      "match": {"host": "echo.test", "path": "/headers"},
+      "headers": {"X-Mitm-Proxy-Test": "smoke-injected"}
+    }
+  ]
+}

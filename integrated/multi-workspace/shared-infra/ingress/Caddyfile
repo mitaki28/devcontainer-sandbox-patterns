@@ -1,0 +1,39 @@
+{
+	auto_https off
+	admin off
+}
+
+# shared ingress: 並列で起動する per-task workspace への inbound 経路。
+#
+# Caddy v2 に host_regexp matcher は無く、正規表現 + named capture を取るには
+# `header_regexp <key> <header> <regex>` を使う。詳細は
+# recipes/ingress-multi-workspace/README.md の「実装の罠と工夫」節参照。
+#
+# header_regexp は raw な Host header を取るため、ブラウザが付ける port suffix
+# (`Host: <name>.devsbx.localhost:8080`) を許容するには末尾に (?::\d+)? が必要。
+:80 {
+	# task wildcard: <task>.devsbx.localhost → <task>-workspace:3000
+	# workspace 起動 = Docker DNS で resolve 可、停止 = upstream unreachable で 502。
+	# Caddy 設定の動的更新は不要 (この routing は recipes/ingress-multi-workspace/ で単体検証している)。
+	@task header_regexp host Host ^(?P<name>[a-z0-9-]+)\.devsbx\.localhost(?::\d+)?$
+	handle @task {
+		reverse_proxy {re.host.name}-workspace:3000
+	}
+
+	# 名前付き port (利用者が静的に追加): app./api.
+	# Host: app.<task>.devsbx.localhost → <task>-workspace:3000
+	# Host: api.<task>.devsbx.localhost → <task>-workspace:4000
+	@app header_regexp app Host ^app\.(?P<name>[a-z0-9-]+)\.devsbx\.localhost(?::\d+)?$
+	handle @app {
+		reverse_proxy {re.app.name}-workspace:3000
+	}
+	@api header_regexp api Host ^api\.(?P<name>[a-z0-9-]+)\.devsbx\.localhost(?::\d+)?$
+	handle @api {
+		reverse_proxy {re.api.name}-workspace:4000
+	}
+
+	# 未マッチの host は明示的に 404。誤って全 host を流さない。
+	handle {
+		respond "no route for host: {host}" 404
+	}
+}

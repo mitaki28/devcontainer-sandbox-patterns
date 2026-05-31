@@ -1,0 +1,9 @@
+{
+  "name": "multi-workspace",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "node",
+  "// note": "compose project name の決定 (= task 名 = subdomain) は IDE 起動時のデフォルト挙動 (workspace folder basename) に依存する。worktree で開いた場合の挙動は IDE 依存。CLI 経由なら `docker compose -p <task> up -d` で明示的に指定できる。",
+  "postCreateCommand": "pnpm install"
+}

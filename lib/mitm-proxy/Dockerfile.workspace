@@ -1,0 +1,47 @@
+# lib/mitm-proxy/ workspace / smoke 共用 image
+#
+# - Bun を入れて smoke / dev tooling 兼用
+# - ca-certificates + curl + update-ca-certificates を install
+# - util-linux で setpriv を提供 (bootstrap の privilege drop に使う)
+# - bootstrap-ca.sh を ENTRYPOINT に置く（root で mitm.it から CA 取得 →
+#   trust store 反映 → `WORKLOAD_USER` (default bun, 非root) に drop して CMD を exec）
+#
+# 不変条件: workload は **非root** で動かす。bootstrap で root が必要なのは
+# `update-ca-certificates` (`/etc/ssl/certs/` 書き込み) だけなので、その直後に
+# `setpriv` で uid drop してから CMD を `exec` する。
+#
+# 各言語ランタイムの自前 trust store 対策として env を全種類セット。
+# `update-ca-certificates` で /etc/ssl/certs/ca-certificates.crt が「OS 標準 + mitmproxy CA」の
+# 結合 bundle になるので、それを指す（mitmproxy の cert 単体だと標準 CA を失う）。
+
+FROM oven/bun:1@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        util-linux && \
+    rm -rf /var/lib/apt/lists/*
+
+# OS trust store を読まない言語ランタイム向けの env。
+# update-ca-certificates 適用後の結合 bundle を指す。
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/mitmproxy.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+    WORKLOAD_USER=bun
+
+COPY bootstrap-ca.sh /usr/local/bin/bootstrap-ca.sh
+RUN chmod +x /usr/local/bin/bootstrap-ca.sh
+
+# WORKDIR は bun user が書ける状態にする (bun のキャッシュ等の書き込みに備える)。
+WORKDIR /app
+RUN chown bun:bun /app
+
+ENTRYPOINT ["/usr/local/bin/bootstrap-ca.sh"]
+CMD ["sleep", "infinity"]

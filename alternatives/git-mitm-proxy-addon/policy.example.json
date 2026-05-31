@@ -1,0 +1,15 @@
+{
+  "_doc_top": "alternatives/git-mitm-proxy-addon/ の mitm-proxy policy。lib/mitm-proxy/ が read-only 許可を主とする最小構成に絞られているのに対し、軽量代替として github.com の git transport を mitm-proxy 上の addon (GitHubPolicy) で扱う構成 (recipes/git-gateway/README.md 参照)。",
+  "_doc_readonly_hosts": "GET / HEAD / OPTIONS のみ通す read-only な許可 bucket。github.com と codeload.github.com は GitHubPolicy が先に処理する (副作用のない POST 例外 + push ACL + PAT 注入) ので readonly_hosts にも含めておく必要がある (GitHubPolicy が fetch/push と判定しなかった github.com への request は CommonPolicy の readonly_hosts に流れて GET のみ通る)。",
+  "_doc_trusted_hosts": "全 method 素通し。本 recipe では空。",
+  "trusted_hosts": [],
+  "readonly_hosts": [
+    "api.github.com",
+    "github.com",
+    "codeload.github.com",
+    "registry.npmjs.org",
+    "httpbin.org",
+    "*.githubusercontent.com"
+  ],
+  "header_inject": []
+}

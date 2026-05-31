@@ -1,0 +1,13 @@
+FROM oven/bun:1@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e
+
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openssl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY mock-server.ts /app/mock-server.ts
+COPY mock-entrypoint.sh /app/mock-entrypoint.sh
+RUN chmod +x /app/mock-entrypoint.sh
+
+ENTRYPOINT ["/app/mock-entrypoint.sh"]

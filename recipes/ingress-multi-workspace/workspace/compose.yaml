@@ -1,0 +1,32 @@
+# per-task workspace の単体検証用 compose project。
+#
+# 各 task (= compose project name) ごとに本 compose を `-p <task>` で起動する。
+# 同 recipe の ingress/compose.yaml が事前に立ち上がっている必要 (external network 参照)。
+#
+# 起動例 (task 名 = task-a):
+#   docker compose -f workspace/compose.yaml -p task-a up -d
+#
+# 並列起動:
+#   docker compose -f workspace/compose.yaml -p task-b up -d
+#   ...
+
+services:
+  workspace:
+    image: mcr.microsoft.com/devcontainers/base:trixie@sha256:e389149057371298eaeb72e736fc2c4dcb79974de222dd471d2e6d675d2f61c4
+    command: sleep infinity
+    working_dir: /workspace
+    networks:
+      # internal: per-task の egress 遮断 (compose default 命名 = <project>_internal)
+      internal: {}
+      # shared: ingress と通信する経路。alias を <project>-workspace に設定することで
+      # ingress 側 Caddyfile の `{re.name.name}-workspace:3000` upstream pattern と整合する。
+      shared:
+        aliases:
+          - ${COMPOSE_PROJECT_NAME}-workspace
+
+networks:
+  internal:
+    internal: true
+  shared:
+    external: true
+    name: devsbx-recipe-ingress-multi-workspace

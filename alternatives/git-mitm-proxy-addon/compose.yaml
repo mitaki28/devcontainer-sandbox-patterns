@@ -1,0 +1,84 @@
+# alternatives/git-mitm-proxy-addon/ compose: lib/mitm-proxy/ の軽量 git-write 代替案。
+#
+# 構造:
+# - mitm-github: mitmproxy + lib の default addons (CommonPolicy etc) + recipe 固有
+#   addon (github.py) を MITM_EXTRA_ADDONS=github で load。github.com の git smart-HTTP
+#   を path-based ACL + PAT 注入で扱う。
+# - workspace: devcontainer 起動用。HTTPS_PROXY 経由で mitm-github を叩く。
+#
+# smoke は lib/mitm-proxy/ 流儀に揃え、test/compose.yaml で別 stack として立てる
+# (production の env_file / 実 internet 構成と分離し、閉鎖環境 + mock-upstream で完結させる)。
+#
+# build context は **repo root** に揃える (lib/mitm-proxy/addons/ を COPY するため)。
+
+services:
+  mitm-github:
+    build:
+      # build context は repo root。lib/mitm-proxy/addons/ を COPY するため。
+      context: ../..
+      dockerfile: alternatives/git-mitm-proxy-addon/Dockerfile
+    image: mitm-github:dev
+    command:
+      - mitmdump
+      - --listen-host
+      - 0.0.0.0
+      - --listen-port
+      - "8080"
+      - --set
+      - block_global=false
+      - -s
+      - /addons/policy.py
+    environment:
+      # lib/mitm-proxy/addons/policy.py の拡張点。github.py module を addons list の
+      # 先頭に挿入する。
+      MITM_EXTRA_ADDONS: github
+      POLICY_FILE: /etc/mitm-proxy/policy.json
+    volumes:
+      - mitm-ca:/home/mitmproxy/.mitmproxy
+      - ./policy.example.json:/etc/mitm-proxy/policy.json:ro
+    env_file:
+      # GITHUB_PAT / ALLOWED_PUSH_REPOS を recipe 固有 env_file で渡す。
+      # repo ディレクトリ外 (ホームの .config 配下) に置くことで workspace の
+      # bind mount からは分離される。
+      - path: ${HOME}/.config/devsbx/mitm-github.env
+        required: false
+    networks:
+      - internal-net
+      - external-net
+    healthcheck:
+      test:
+        - CMD
+        - test
+        - -f
+        - /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  workspace:
+    build:
+      context: ../../lib/mitm-proxy
+      dockerfile: Dockerfile.workspace
+    image: lib-mitm-proxy-workspace:dev
+    command: sleep infinity
+    environment:
+      HTTP_PROXY: http://mitm-github:8080
+      HTTPS_PROXY: http://mitm-github:8080
+      NO_PROXY: localhost,127.0.0.1
+    networks:
+      - internal-net
+    depends_on:
+      mitm-github:
+        condition: service_healthy
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+
+networks:
+  internal-net:
+    internal: true
+  external-net:
+
+volumes:
+  mitm-ca:

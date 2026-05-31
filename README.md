@@ -1,0 +1,134 @@
+# devcontainer-sandbox-patterns
+
+devcontainer をサンドボックスとして扱うための隔離パターン集。AI エージェント (Claude Code / Cursor / Codex 等) を信頼前提では運用したくない開発者向けに、**意図しない外部影響を構造的に防ぐ隔離パターン** を追求した技術的探索の成果をまとめたもの。プロキシ群に信頼境界を集約することで、AI エージェントの操作・通信に対して高いレベルの制御を可能にする。
+
+標準的な devcontainer 構成では、AI エージェントと認証情報・外部通信路が同じコンテナに同居しており、エージェントの暴走や侵害、悪意ある依存パッケージ経由で秘匿情報の外部持ち出しや任意ホストへの書き込みが成立してしまう構造が残る。本リポジトリでは、**秘匿情報の保持・通信先の選択・操作許可の判定** をすべてプロキシ側で行い、作業コンテナにはそれらを書き換える手段を一切持たせない形に組み替える。設計原則は **「信頼境界をプロキシ群に置き、作業コンテナ自身は認可を制御できない」** (詳細は [docs/02-design.md](./docs/02-design.md))。
+
+> [!CAUTION]
+> **無保証**: 本リポジトリは隔離パターンと設計の考え方を整理する技術的探索であり、実装や構成に脆弱性や不具合が存在しないことを保証するものではない。利用者の責任で評価・採用すること (詳細は [LICENSE](./LICENSE) の `AS IS` 条項)。
+
+> [!IMPORTANT]
+> **AI 支援**: 本リポジトリのコードおよびドキュメントは [Claude](https://claude.com/) (主に Claude Code) を用いて実装・執筆している。設計判断・監修・レビューは mitaki28 が行っているが、文章・コードは生成されたものである。
+
+## 1 分で分かる概要
+
+| | 既存の devcontainer 隔離 | 本リポジトリのパターン |
+|---|---|---|
+| 秘匿情報の届く先 | 作業コンテナ | **プロキシコンテナのみ**<br>(作業コンテナには届かない) |
+| ACL 判定の場所 | 作業コンテナ内<br>(コンテナ内権限で書き換え可能) | **プロキシコンテナ**<br>(作業コンテナから書き換え不可) |
+| 外部への外向き通信 | 任意ホスト可 | **プロキシ経由のみ**<br>(Docker ネットワーク設定で遮断) |
+| AI エージェント侵害時の被害 | 秘匿情報全漏洩 + 任意送信 | プロキシ許可範囲のみ |
+
+具体的な実装は以下 2 つの基本コンポーネント + レシピ集として提供される:
+
+- **`lib/mcp-proxy`** — 細粒度・**明示的** な操作許可を実現するため、MCP の前段に立ち、MCP ツール単位での ACL を提供する
+- **`lib/mitm-proxy`** — 粗粒度・**暗黙的** な操作許可を実現するため、HTTP(S) 通信の前段に立ち、ホスト単位に加え HTTP メソッド / パス単位での ACL を提供する
+
+これらの基本コンポーネントを組み合わせて 4 種類のレシピ + 2 種類の統合構成、加えて 4 種類の代替・参考実装を提供する。
+
+![設計原則の概念図: 信頼境界をプロキシ群に置き、作業コンテナ自身は認可を制御できない](./docs/concept.excalidraw.png)
+
+## 想定する読者と前提
+
+以下に当てはまる読者向け:
+
+**問題意識**:
+
+- AI エージェント (Claude Code / Cursor / Codex CLI 等) を完全に信頼前提では運用したくない
+- 標準的な devcontainer 構成では隔離として不十分な点があると気づいている
+- 構成の複雑さを許容してでも、構造的な隔離を実現したい
+
+**適用範囲**:
+
+- 個人開発者のローカル環境での利用を主眼とする
+- チーム共有環境 / CI / 本番環境への直接適用は想定外
+- macOS + Docker Desktop 環境を想定
+
+## 構成
+
+```
+.
+├── docs/             # 読み物 (思想 → 設計 → 各論)
+├── lib/              # 基本コンポーネント (mcp-proxy / mitm-proxy)
+├── recipes/          # ユースケース別レシピ
+├── integrated/       # 統合構成 (基本コンポーネント + レシピを 1 compose にまとめた完成形)
+└── alternatives/     # 代替・参考実装 (主推奨とは別軸の選択肢)
+```
+
+### 読み物 (docs/)
+
+順番に読むことを想定している。
+
+1. [01-problem.md](./docs/01-problem.md) — 既存 devcontainer 隔離の 2 つの穴 (通信先制御の粒度 / 長寿命の秘匿情報の同居)
+2. [02-design.md](./docs/02-design.md) — 設計原則と本書で扱う安全性モデル
+3. [03-foundation.md](./docs/03-foundation.md) — Docker + internal ネットワークの前提
+4. [04-mcp-proxy.md](./docs/04-mcp-proxy.md) — 基本コンポーネント mcp-proxy の設計
+5. [05-mitm-proxy.md](./docs/05-mitm-proxy.md) — 基本コンポーネント mitm-proxy の設計
+6. [06-cloud-mcp.md](./docs/06-cloud-mcp.md) — クラウド認証情報の短寿命化
+7. [07-web-fetch.md](./docs/07-web-fetch.md) — web fetch を特化 MCP に集約する
+8. [08-git-gateway.md](./docs/08-git-gateway.md) — Git transport の隔離
+9. [09-ingress.md](./docs/09-ingress.md) — 開発サーバをホストブラウザに見せる
+10. [10-single-workspace.md](./docs/10-single-workspace.md) — 作業コンテナ単独起動向けの構成
+11. [11-multi-workspace.md](./docs/11-multi-workspace.md) — 作業コンテナ並列起動向けの構成
+
+付録:
+
+- [alt-dependencies-build-time.md](./docs/appendix/alt-dependencies-build-time.md) — 実行時疎通先の最小化
+- [alt-simple-http-proxy.md](./docs/appendix/alt-simple-http-proxy.md) — 独自 CA 不要の mitm-proxy 代替
+- [alt-git-mitm-proxy-addon.md](./docs/appendix/alt-git-mitm-proxy-addon.md) — git-gateway の軽量代替
+- [incomplete-fetch-mcp.md](./docs/appendix/incomplete-fetch-mcp.md) — 任意ホスト fetch の構造的限界
+
+巻末:
+
+- [99-postscript.md](./docs/99-postscript.md) — あとがき
+
+### コード (lib/, recipes/, integrated/, alternatives/)
+
+すべて `docker compose run --rm --build smoke` (smoke test = 最小疎通検証) またはレシピごとのシェルスクリプトで動作確認できる。各レシピの README に手順あり。
+
+**基本コンポーネント** (`lib/`) — レシピや統合構成から再利用される土台:
+
+| 実装 | 役割 | 説明章 |
+|---|---|---|
+| `lib/mcp-proxy/` | 細粒度・明示的な操作許可 | [04](./docs/04-mcp-proxy.md) |
+| `lib/mitm-proxy/` | 粗粒度・暗黙的な操作許可 | [05](./docs/05-mitm-proxy.md) |
+
+`lib/mcp-proxy/examples/` (api-key 認証 = GitHub MCP / OAuth 2.1 = Atlassian Rovo) は **`lib/mcp-proxy` の利用例** として位置付け、統合構成から再利用される。詳細は [04-mcp-proxy.md](./docs/04-mcp-proxy.md) と examples 側 README を参照。
+
+**レシピ** (`recipes/`) — ユースケースごとに独立して動作する隔離パターン:
+
+| 実装 | 役割 | 説明章 |
+|---|---|---|
+| `recipes/cloud-mcp-with-short-lived-credential/` | クラウド認証情報の短寿命化 | [06](./docs/06-cloud-mcp.md) |
+| `recipes/git-gateway/` | Git transport の隔離 | [08](./docs/08-git-gateway.md) |
+| `recipes/ingress-single-workspace/` | 作業コンテナ単独起動向けのインバウンド経路 | [09](./docs/09-ingress.md) |
+| `recipes/ingress-multi-workspace/` | 作業コンテナ並列起動向けのインバウンド経路 | [09](./docs/09-ingress.md) |
+
+**統合構成** (`integrated/`) — 基本コンポーネント + 複数レシピを 1 つの compose に組み合わせた完成形:
+
+| 実装 | 役割 | 説明章 |
+|---|---|---|
+| `integrated/single-workspace/` | 作業コンテナ単独起動向けの構成 | [10](./docs/10-single-workspace.md) |
+| `integrated/multi-workspace/` | 作業コンテナ並列起動向けの構成 | [11](./docs/11-multi-workspace.md) |
+
+両者はユースケースに応じて選ぶ対等な選択肢で、同じホストポート (`127.0.0.1:8080`) を使うため同時起動は不可:
+
+- **single-workspace** — 並列稼働を想定せず、1 スタックを順次切り替えて回す運用。構成数を抑え、shared-infra を別 compose プロジェクトとして常駐させたくない場合に向く
+- **multi-workspace** — 同一プロジェクトの作業コンテナを **同時に** 複数走らせて並列タスクを進めたい運用。1 つのホストポートを全作業コンテナでサブドメインに振り分け、OAuth リフレッシュの競合を回避するために shared-infra を 1 度だけ常駐起動する 2 層構造を採る
+
+**代替・参考** (`alternatives/`) — 主推奨とは別軸の選択肢 (軽量化 / 別アプローチ / 未完成扱い):
+
+| 実装 | 役割 | 説明章 |
+|---|---|---|
+| `alternatives/dependencies-build-time/` | 実行時疎通先の最小化 | 付録 [alt-dependencies-build-time](./docs/appendix/alt-dependencies-build-time.md) |
+| `alternatives/simple-http-proxy/` | 独自 CA 不要の mitm-proxy 代替 | 付録 [alt-simple-http-proxy](./docs/appendix/alt-simple-http-proxy.md) |
+| `alternatives/git-mitm-proxy-addon/` | git-gateway の軽量代替 | 付録 [alt-git-mitm-proxy-addon](./docs/appendix/alt-git-mitm-proxy-addon.md) |
+| `alternatives/fetch-mcp/` | 任意ホスト fetch の構造的限界 | 付録 [incomplete-fetch-mcp](./docs/appendix/incomplete-fetch-mcp.md) |
+
+## 貢献について
+
+貢献の方針は [CONTRIBUTING](./CONTRIBUTING.md) を参照してください。
+
+## ライセンス
+
+[MIT License](./LICENSE) — Copyright (c) 2026 mitaki28

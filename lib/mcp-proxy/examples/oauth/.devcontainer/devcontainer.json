@@ -1,0 +1,6 @@
+{
+  "name": "mcp-atlassian-isolated",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace"
+}

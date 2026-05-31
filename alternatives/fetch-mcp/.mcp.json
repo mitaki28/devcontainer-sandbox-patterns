@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "type": "http",
+      "url": "http://fetch-mcp:8000/mcp"
+    }
+  }
+}

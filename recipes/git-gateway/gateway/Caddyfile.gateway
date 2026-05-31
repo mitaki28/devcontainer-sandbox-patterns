@@ -1,0 +1,96 @@
+# 静的部分の Caddyfile (production gateway 用)。
+# 動的に変わるのは ALLOWED_REPOS から生成される per-repo ファイルのみで、
+# このファイル自体は build 時に COPY されたまま runtime で書き換えない。
+#
+# 設計:
+#   1. snippet (fcgiwrap_backend) で「fcgiwrap → git-http-backend を FastCGI で叩く」
+#      block を 1 か所に集約し、各 per-repo の push handler から import で再利用する
+#      (per-repo ファイルが短くなる + fastcgi env のリストを 1 か所で管理できる)
+#   2. import /etc/caddy/per-repo/*.caddy で entrypoint が生成する per-repo handler を
+#      取り込む。Caddy の handle は first match wins なので、specific な per-repo を
+#      先に置くことで未登録 repo 用の deny / passthrough が登録 repo を巻き込まない
+#   3. {$UPSTREAM_HOST_PART} は Caddy 自身が起動時に環境変数から展開する。
+#      entrypoint は UPSTREAM_HOST_PART を export してから caddy run するだけで良い
+
+{
+    auto_https off
+    admin off
+    log {
+        output stderr
+        format console
+    }
+}
+
+# fcgiwrap → git-http-backend を CGI 実行する block (snippet として再利用)。
+# per-repo の push handler から `import fcgiwrap_backend` で呼ぶ。
+(fcgiwrap_backend) {
+    reverse_proxy unix//run/fcgiwrap.sock {
+        transport fastcgi {
+            env SCRIPT_FILENAME /usr/libexec/git-core/git-http-backend
+            env SCRIPT_NAME ""
+            env PATH_INFO {http.request.uri.path}
+            env GIT_PROJECT_ROOT /srv/git
+            env GIT_HTTP_EXPORT_ALL 1
+        }
+    }
+}
+
+# 未登録 repo の anonymous fetch passthrough (snippet として再利用)。
+# Authorization / Cookie を strip した上で上流に reverse_proxy する。
+(anon_upstream_passthrough) {
+    request_header -Authorization
+    request_header -Cookie
+    reverse_proxy {$UPSTREAM_HOST_PART}
+}
+
+:8080 {
+    @health path /_health
+    handle @health {
+        respond "ok" 200
+    }
+
+    # 登録 repo (ALLOWED_REPOS) の per-repo handler。entrypoint が per-repo.caddy.tmpl
+    # を envsubst で展開し、1 repo あたり 1 ファイルとして /etc/caddy/per-repo/<N>.caddy
+    # に書き出す。各 per-repo ファイルは git smart HTTP の 4 handler (push advertise /
+    # push pack / fetch advertise / fetch pack) を持つ。
+    import /etc/caddy/per-repo/*.caddy
+
+    # 未登録 repo の push を 403。`*` は path の任意 prefix にマッチするため、
+    # /any/repo.git/info/refs?service=git-receive-pack / /any/repo.git/git-receive-pack
+    # の両方を捕まえる。registered repo の同 path は上の per-repo handler が先に
+    # 拾うのでここには到達しない。
+    @unreg_push_advertise {
+        path */info/refs
+        query service=git-receive-pack
+    }
+    handle @unreg_push_advertise {
+        respond "push to unregistered repo denied" 403
+    }
+    @unreg_push path */git-receive-pack
+    handle @unreg_push {
+        respond "push to unregistered repo denied" 403
+    }
+
+    # 未登録 repo の anonymous fetch は git smart HTTP の (HTTP メソッド, パス) の
+    # 組のみを通す。それ以外は下の 404 ハンドラに吸収される。
+    @unreg_fetch_advertise {
+        method GET
+        path */info/refs
+        query service=git-upload-pack
+    }
+    handle @unreg_fetch_advertise {
+        import anon_upstream_passthrough
+    }
+    @unreg_fetch_pack {
+        method POST
+        path */git-upload-pack
+    }
+    handle @unreg_fetch_pack {
+        import anon_upstream_passthrough
+    }
+
+    # それ以外 (= git smart HTTP のエンドポイントではない path) は 404。
+    handle {
+        respond "not a git transport endpoint" 404
+    }
+}

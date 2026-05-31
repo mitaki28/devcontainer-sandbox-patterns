@@ -1,0 +1,110 @@
+services:
+  mitmproxy:
+    # 不変条件: addon / policy は Dockerfile.mitmproxy で image layer に
+    # 焼き込み、bind mount で workspace 由来のパスを指さない (workspace 側で
+    # 書き換え可能なファイルを proxy が load しないようにするため)。
+    build:
+      context: .
+      dockerfile: Dockerfile.mitmproxy
+    image: lib-mitm-proxy:dev
+    # mitmdump = headless mitmproxy。-s でカスタム addon を読む。
+    # web UI は要らないので mitmweb は使わない。
+    command:
+      - mitmdump
+      - --listen-host
+      - 0.0.0.0
+      - --listen-port
+      - "8080"
+      # block_global は default true のまま (= mitmproxy 自身が「グローバル IP source
+      # からの接続」を block する defense-in-depth)。docker 内部 client は private
+      # IP なので default で block されない。明示的に false にする理由が無い。
+      - -s
+      - /addons/policy.py
+    volumes:
+      # CA 秘密鍵は named volume に永続化。最初の起動で自動生成される。
+      - mitm-ca:/home/mitmproxy/.mitmproxy
+    environment:
+      POLICY_FILE: /etc/mitm-proxy/policy.json
+    # policy.json の header_inject エントリで `${VAR}` 参照される secret を env_file から
+    # 受け取る。repo ディレクトリ外（ホームの .config 配下）に置くことで workspace の
+    # bind mount からは分離される。lib/mitm-proxy/ 自体の default smoke では
+    # 何も注入しない (read-only 許可を主とする最小構成)。
+    env_file:
+      - path: ${HOME}/.config/devsbx/mitm-proxy.env
+        required: false
+    networks:
+      - internal-net
+      - external-net
+    healthcheck:
+      # CA cert ファイルの存在で「mitmproxy が立ち上がって CA 生成済み」を判定する。
+      # listen 開始確認は別途取れるとより堅いが、ここでは最低限の可用性指標。
+      test:
+        - CMD
+        - test
+        - -f
+        - /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  # addon の Python ロジックを mitmproxy image 内で unittest 実行する。
+  # mitmproxy が image に入っているため `mitmproxy.test.tflow` / `mitmproxy.http` を
+  # そのまま使えて、追加 dep ゼロで Match / HostMatcher / CommonPolicy / HeaderInjector /
+  # HostGuard を単体検証できる。実 TLS / 実ネット越し疎通は smoke 側に残し、ここはロジック層のみ。
+  #
+  # 不変条件の例外: unit は test runner であって proxy 本体ではない。
+  # workspace でもなく、独立した test container 内でしか動かないので、addons を
+  # bind mount で渡しても security boundary に影響しない (test 編集 → 即実行の
+  # iteration を維持するため bind mount のまま)。
+  unit:
+    image: mitmproxy/mitmproxy@sha256:f4f0f41f5278f284fcc0a306f82849f38ab2e133c1d71d25a42bd06d7ff6928b
+    entrypoint: []
+    working_dir: /addons
+    environment:
+      # config.py は import 時に POLICY_FILE を読みに行く。存在しないパスを渡せば
+      # 空 dict 扱いになり、副作用なく import できる。
+      POLICY_FILE: /nonexistent.json
+      # ro mount 上に __pycache__ を書こうとして失敗するのを抑止。
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./addons:/addons:ro
+    command:
+      - python
+      - -m
+      - unittest
+      - discover
+      - -s
+      - tests
+      - -t
+      - .
+      - -v
+
+  workspace:
+    build:
+      context: .
+      dockerfile: Dockerfile.workspace
+    image: lib-mitm-proxy-workspace:dev
+    command: sleep infinity
+    environment:
+      HTTP_PROXY: http://mitmproxy:8080
+      HTTPS_PROXY: http://mitmproxy:8080
+      NO_PROXY: localhost,127.0.0.1
+    networks:
+      - internal-net
+    depends_on:
+      mitmproxy:
+        condition: service_healthy
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+
+networks:
+  # workspace を閉じ込める側。internal: true で gateway 無し。
+  internal-net:
+    internal: true
+  # mitmproxy だけ外に出る。
+  external-net:
+
+volumes:
+  mitm-ca:

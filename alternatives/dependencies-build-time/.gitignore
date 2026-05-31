@@ -1,0 +1,6 @@
+# node_modules は image に焼く構成のため、host 側 / bind mount 経由には出さない。
+# 誤って host で `pnpm install` した場合も commit しないように除外する。
+node_modules/
+
+# pnpm のローカルキャッシュ。dep-update 側は named volume で扱うが、保険で除外。
+.pnpm-store/

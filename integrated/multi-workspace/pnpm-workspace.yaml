@@ -1,0 +1,14 @@
+# supply chain 攻撃の時間的緩衝。新規 publish された package version は 7 日経過していないと
+# install しない (pnpm v10.16+ の `minimumReleaseAge`)。
+#
+# lib/mcp-proxy/bunfig.toml / alternatives/fetch-mcp/bunfig.toml で Bun 側に同等の保護を入れてあるが、
+# 本 recipe では pnpm 経由 (devcontainer の postCreateCommand) で install が走るため、ここにも
+# 同じ floor を設ける必要がある。値は minutes 単位 (10080 = 7 日)。
+#
+# pnpm v10 既定の「dependency lifecycle script はデフォルトで実行しない」と組み合わさって、
+# 「0-day で publish された malicious package が postinstall を走らせる」経路に対しては
+# - postinstall 自体が default block
+# - そもそも install されない (7 日 floor)
+# の二段で防御する。import 時実行コードは Node.js を sandbox なしで動かす以上塞がらないため、
+# この floor が時間的猶予を稼ぐ意味を持つ。
+minimumReleaseAge: 10080

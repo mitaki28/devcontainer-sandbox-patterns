@@ -1,0 +1,15 @@
+# smoke test 専用の override。
+# 通常の workspace は base devcontainer image (sleep infinity) で、
+# port 3000/4000 で何も listen していない。smoke では python3 標準ライブラリの
+# http.server を 3000 と 4000 で立てて、ingress 経由のルーティングを検証する。
+#
+# 使い方:
+#   docker compose -f compose.yaml -f compose.smoke.yaml up -d
+#   ./test/smoke.sh   # ↑ をラップしている
+services:
+  workspace:
+    image: python:3-alpine@sha256:dd4d2bd5b53d9b25a51da13addf2be586beebd5387e289e798e4083d94ca837a
+    command:
+      - /bin/sh
+      - -c
+      - "python3 -m http.server 3000 & python3 -m http.server 4000 & wait"

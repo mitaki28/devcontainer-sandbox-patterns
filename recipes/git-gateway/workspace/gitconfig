@@ -1,0 +1,14 @@
+# system-wide gitconfig.
+# github.com への全 git 操作 (fetch / push / clone) を git-gateway:8080 に書き換える。
+# git-gateway 内で per-repo Location が:
+#   - 登録 repo (ALLOWED_REPOS): fetch を上流に reverse-proxy + PAT 注入、
+#                                 push は内部 git-http-backend + pre-receive で上流転送
+#   - 未登録 repo: anonymous fetch passthrough のみ、push は 403
+# smoke では UPSTREAM_BASE_URL=http://mock-upstream:8080/ で上流を mock に向けている。
+# 本番統合時もこの gitconfig はそのまま (insteadOf 1 行で fetch / push 両方カバー)。
+
+[url "http://git-gateway:8080/"]
+    insteadOf = https://github.com/
+
+[safe]
+    directory = *

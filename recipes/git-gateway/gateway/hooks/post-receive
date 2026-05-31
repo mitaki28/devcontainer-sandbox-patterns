@@ -1,0 +1,20 @@
+#!/bin/sh
+# post-receive (defense-in-depth, default off).
+#
+# pre-receive で先に上流 (push-gateway.upstream-url) に push しているので、push 成功時の
+# gateway / 上流の整合は通常成立する。ただしクラッシュ系 (pre-receive exit 0 直後に
+# プロセス障害で gateway 側の ref update が完了しない) ケースや、外部から上流に push
+# が入った場合の gateway 自動追従をやるなら、ここで上流から fetch するのが最も簡単な
+# 後追い同期手段。
+#
+# smoke では state ズレを再現する都合上、デフォルトで off にしてある。
+# 実運用時は DISABLE_POST_RECEIVE_SYNC を未設定 (or 0) にして有効化する。
+set -eu
+
+if [ "${DISABLE_POST_RECEIVE_SYNC:-0}" = "1" ]; then
+    exit 0
+fi
+TARGET=$(git config --get push-gateway.upstream-url || true)
+[ -z "$TARGET" ] && exit 0
+git fetch "$TARGET" "+refs/heads/*:refs/heads/*" 2>/dev/null || true
+exit 0

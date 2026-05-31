@@ -1,0 +1,10 @@
+# mitmproxy の CA は named volume に持つので repo には入らないが、
+# 取り違え防止のため明示。
+*.pem
+*.crt
+*.key
+
+# secret は ~/.config/devsbx/mitm-proxy.env に置く前提だが、
+# 万一 recipe 内に置いた場合の漏洩防止。
+.env
+mitm-proxy.env

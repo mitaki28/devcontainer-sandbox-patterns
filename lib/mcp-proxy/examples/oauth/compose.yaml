@@ -1,0 +1,49 @@
+services:
+  proxy:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.binary
+    image: mcp-proxy:bin
+    # localhost bind なので外部ホストからは到達しない。
+    ports:
+      - "127.0.0.1:8810:8000"
+      # OAuth callback port。初回認可時のみホストブラウザから到達する必要がある。
+      - "127.0.0.1:3030:3030"
+    volumes:
+      # OAuth tokens / 動的登録された client_id / PKCE verifier を永続化。
+      # workspace の bind mount (.:/workspace) からは分離するため、
+      # recipe 外（${HOME}/.cache/...）に置く。初回起動前に mkdir 済みである必要がある。
+      - type: bind
+        source: ${HOME}/.cache/devsbx/mcp-atlassian
+        target: /data
+        bind:
+          create_host_path: false
+    # workspace と共有する Bearer token (PROXY_TOKEN)。
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-proxy.env
+        required: true
+    # PROXY_TOKEN を引数に展開するため shell 経由で起動。
+    entrypoint: ["/bin/sh", "-c", "--"]
+    # --callback-listen 0.0.0.0:3030 は host port publish 経由の到達のため明示
+    # (default 127.0.0.1:3030 は container 内 loopback のみで bind するため、Docker NAT
+    # 経由で host から 127.0.0.1:3030 を叩いても container の eth0 には届かない)。
+    command:
+      - >
+        exec mcp-proxy --listen 0.0.0.0:8000 -t http
+        --token "$$PROXY_TOKEN"
+        --oauth --callback-listen 0.0.0.0:3030 --token-store /data
+        atlassian https://mcp.atlassian.com/v1/mcp/authv2
+
+  workspace:
+    image: mcr.microsoft.com/devcontainers/base:trixie@sha256:e389149057371298eaeb72e736fc2c4dcb79974de222dd471d2e6d675d2f61c4
+    command: sleep infinity
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+    # Atlassian access_token / refresh_token は proxy のみが保持する。
+    # workspace から proxy への接続には PROXY_TOKEN が必要。
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-proxy.env
+        required: true
+    depends_on:
+      - proxy

@@ -1,0 +1,5 @@
+# smoke 用 allowlist。test/compose.yaml の proxy service が
+# /etc/squid/allowed-hosts.txt として bind mount し、本番用 allowed-hosts.txt
+# の代わりに参照する。RFC 6761 で予約された .test TLD を使うため、実 DNS では
+# resolve せず、smoke 専用と読み取れる。
+mock-target.test
