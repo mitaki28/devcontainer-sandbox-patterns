@@ -1,0 +1,70 @@
+# mock-upstream の静的 Caddyfile (smoke 専用、TLS-enabled)。
+# 動的に変わるのは smoke の invariant 検証用 matcher のみで、それは entrypoint が
+# /etc/caddy/mock-checks.caddy に書き出してここから import する。
+#
+# 役割:
+#   - MOCK_REPOS で init された bare repo に anonymous receive-pack も含めて service
+#   - smoke が addon の PAT 注入不変条件を検証できるよう、EXPECT_PAT_FOR_REPOS に応じた
+#     401 challenge を返す (Authorization が無ければ / 値が一致しなければ 401)
+#   - addon (mitm-github) が CONNECT する宛先は `<alias>:443` なので :443 で TLS listen。
+#     entrypoint が openssl で生成した self-signed cert を提示し、mitm-github 側は
+#     --set ssl_verify_upstream_trusted_ca=/certs/mock-upstream.crt で trust する。
+#
+# 本番 (実 github.com) では mock-upstream service 自体が存在しない。
+
+{
+    auto_https off
+    admin off
+    log {
+        output stderr
+        format console
+    }
+}
+
+# anonymous receive-pack も含めて全部受ける fcgiwrap → git-http-backend block。
+# git-gateway 版 mock とまったく同じ。
+(fcgiwrap_backend) {
+    reverse_proxy unix//run/fcgiwrap.sock {
+        transport fastcgi {
+            env SCRIPT_FILENAME /usr/libexec/git-core/git-http-backend
+            env SCRIPT_NAME ""
+            env PATH_INFO {http.request.uri.path}
+            env GIT_PROJECT_ROOT /srv/git
+            env GIT_HTTP_EXPORT_ALL 1
+        }
+    }
+}
+
+:443 {
+    # entrypoint が openssl で生成した self-signed cert を提示する。SAN には
+    # docker network alias で受ける hostname (github.com / api.github.com /
+    # codeload.github.com / raw.githubusercontent.com) が並ぶ。mitm-github 側は
+    # --set ssl_verify_upstream_trusted_ca で本 cert を trust している。
+    tls /certs/mock-upstream.crt /certs/mock-upstream.key
+
+    @health path /_health
+    handle @health {
+        respond "ok" 200
+    }
+
+    # smoke 用の Authorization 検証 (PAT 要求)。entrypoint が生成。
+    # `/<repo>.git/*` path に Authorization が無ければ 401。EXPECT_PAT が未設定なら
+    # 空ファイルが import される (= noop)。
+    import /etc/caddy/mock-checks.caddy
+
+    # git smart-HTTP path (/<owner>/<repo>.git[/...]) を fcgiwrap に流す。
+    # Caddy の path matcher glob (`*`) では `/<owner>/<repo>.git` の構造を正確に
+    # 切り出すのが難しいので path_regexp で書く (実測で `path /*/*.git/*` glob は
+    # 期待通り match しなかった)。
+    @git path_regexp ^/[^/]+/[^/]+\.git(/|$)
+    handle @git {
+        import fcgiwrap_backend
+    }
+
+    # それ以外の non-git path (GET / や /zen 等) は 200 を返して、実 github.com の
+    # marketing / API endpoint の振る舞いを smoke 用に模す。CommonPolicy readonly_hosts
+    # の fall-through が proxy で deny されない (= upstream まで届いた) ことの確認用。
+    handle {
+        respond "mock-upstream: ok (non-git path)" 200
+    }
+}

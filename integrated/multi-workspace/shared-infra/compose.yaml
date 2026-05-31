@@ -1,0 +1,268 @@
+# shared-infra: shared な mcp-* / mitmproxy / shared ingress を 1 度だけ起動して常駐。
+#
+# 起動: `docker compose -p devsbx-infra up -d`
+# (本ディレクトリで実行。project name `devsbx-infra` は固定)
+#
+# per-task workspace は別 compose project として起動する
+# (integrated/multi-workspace/compose.yaml)。
+#
+# 構成の要点:
+# - service hostname / network alias は `<provider>.mcp.devsbx.internal` 規約
+# - networks は `devsbx-shared` (internal: true) + `devsbx-external` の固定名で公開
+# - workspace は含めない (per-task で別途起動)
+# - shared ingress (Caddy) を持つ
+#
+# integrated/single-workspace/ との違いは設計判断として integrated/multi-workspace/README.md にまとめてある。
+
+services:
+  # ----- shared ingress: ホストブラウザ → 各 workspace への inbound -----
+
+  ingress:
+    build:
+      context: ./ingress
+    image: shared-infra-ingress:dev
+    # internal: true (shared) 単独だとポート公開が効かないため、proxy 用の external を
+    # 流用する (詳細は recipes/ingress-single-workspace/README.md)。
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - shared
+      - external
+
+  # ----- git-gateway: github.com への git transport の単一窓口 -----
+  # 詳細は recipes/git-gateway/README.md (read+write 統合 gateway)。
+  # workspace は /etc/gitconfig の insteadOf で github.com → git-gateway.devsbx.internal:8080
+  # に書き換わるため、すべての git 操作がここを通る。
+  # ALLOWED_REPOS / GITHUB_PAT / ALLOWED_REF_PATTERNS / DENIED_REF_PATTERNS は
+  # env_file (`~/.config/devsbx/git-gateway.env`) から受け取る。
+  git-gateway:
+    build:
+      context: ../../../recipes/git-gateway/gateway
+    image: git-gateway-server:dev
+    environment:
+      UPSTREAM_BASE_URL: https://github.com/
+    env_file:
+      - path: ${HOME}/.config/devsbx/git-gateway.env
+        required: false
+    networks:
+      shared:
+        aliases:
+          - git-gateway.devsbx.internal
+      external: {}
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - -o
+        - /dev/null
+        - http://localhost:8080/_health
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  # ----- mitm-proxy: 参照系 floor + hostname allowlist + GitHub PAT 注入 + push ACL -----
+
+  mitmproxy:
+    # floating `latest` tag は upstream の差し替えで PAT / CA 鍵を読める Python プロセスが
+    # 置き換わる経路になるため digest pin。`latest` は version semantics を持たず digest pin と
+    # 意味的に矛盾するため tag 自体を省略し `image@sha256:...` 形式で固定する (他 base image は
+    # `caddy:2-alpine` 等の version 系 tag なので可読性のため tag を併記している)。
+    # 更新は host で `docker pull mitmproxy/mitmproxy:latest` → `docker image inspect ...
+    # --format '{{index .RepoDigests 0}}'` で取得して置換する。
+    image: mitmproxy/mitmproxy@sha256:f4f0f41f5278f284fcc0a306f82849f38ab2e133c1d71d25a42bd06d7ff6928b
+    command:
+      - mitmdump
+      - --listen-host
+      - 0.0.0.0
+      - --listen-port
+      - "8080"
+      - --set
+      - block_global=false
+      - -s
+      - /addons/policy.py
+    volumes:
+      - mitm-ca:/home/mitmproxy/.mitmproxy
+      - ../../../lib/mitm-proxy/addons:/addons:ro
+      - ./policy.json:/etc/mitm-proxy/policy.json:ro
+    environment:
+      POLICY_FILE: /etc/mitm-proxy/policy.json
+    env_file:
+      - path: ${HOME}/.config/devsbx/mitm-proxy.env
+        required: false
+    networks:
+      shared:
+        aliases:
+          - mitmproxy.devsbx.internal
+      external: {}
+    healthcheck:
+      test:
+        - CMD
+        - test
+        - -f
+        - /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  # ----- mcp-* proxies -----
+
+  mcp-github-proxy:
+    build:
+      context: ../../../lib/mcp-proxy
+    image: mcp-proxy:dev
+    # hostname は `<provider>.mcp.devsbx.internal` 規約 (FQDN suffix で MCP 群一括識別可能)。
+    # service key は alphanumeric + - のままで CLI コマンドの安定性を優先。
+    hostname: github.mcp.devsbx.internal
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-github.env
+        required: true
+    entrypoint: ["/bin/sh", "-c", "--"]
+    # tool filter は allow list 化 (read-only 系のみ通す)。上流が新規破壊系 tool を追加した場合に
+    # 素通りしない安全側に倒す方針。github MCP の tool 命名規約 (get_/list_/search_/<noun>_read) を
+    # 利用して 4 パターンで read-only 系をカバー。破壊系 (create_/update_/add_/delete_/merge_/push_/
+    # fork_/edit_/*_write/request_copilot_review/transition_/run_secret_scanning 等) は multi-workspace
+    # の利用モデルでは git push (git-gateway 経由 + ALLOWED_REPOS + ref ACL) と GitHub Web UI に倒す。
+    # 破壊系を MCP に通したい個別ケースは --allow-tool を都度追加する。
+    command:
+      - >
+        exec node src/index.ts --listen 0.0.0.0:8000 -t http
+        -H "Authorization: Bearer $$GITHUB_PAT"
+        --allow-tool 'get_*'
+        --allow-tool 'list_*'
+        --allow-tool 'search_*'
+        --allow-tool '*_read'
+        github https://api.githubcopilot.com/mcp/
+    networks:
+      shared:
+        aliases:
+          - github.mcp.devsbx.internal
+      external: {}
+
+  mcp-context7-proxy:
+    build:
+      context: ../../../lib/mcp-proxy
+    image: mcp-proxy:dev
+    hostname: context7.mcp.devsbx.internal
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-context7.env
+        required: false
+    entrypoint: ["/bin/sh", "-c", "--"]
+    command:
+      - |
+        if [ -n "$$CONTEXT7_API_KEY" ]; then
+          exec node src/index.ts --listen 0.0.0.0:8000 -t http \
+            -H "CONTEXT7_API_KEY: $$CONTEXT7_API_KEY" \
+            context7 https://mcp.context7.com/mcp
+        else
+          exec node src/index.ts --listen 0.0.0.0:8000 -t http \
+            context7 https://mcp.context7.com/mcp
+        fi
+    networks:
+      shared:
+        aliases:
+          - context7.mcp.devsbx.internal
+      external: {}
+
+  # gcloud-mcp を short-lived access token で動かす (recipes/cloud-mcp-with-short-lived-credential/ と同じ方式)。
+  # host 側で refresh-token.sh を 50min 周期で叩いて 1h 寿命の access token を発行する運用。
+  # cloud を使わない利用者は token dir を作らないだけで OK (この service は起動失敗するが、
+  # workspace 側で depends_on していないため他に波及しない)。
+  mcp-gcloud-proxy:
+    build:
+      context: ../../..
+      dockerfile: recipes/cloud-mcp-with-short-lived-credential/Dockerfile.gcloud-mcp
+    image: gcp-mcp-proxy:dev
+    hostname: gcloud.mcp.devsbx.internal
+    env_file:
+      - path: ${HOME}/.config/devsbx/gcp-mcp.env
+        required: false
+    volumes:
+      - type: bind
+        source: ${HOME}/.cache/devsbx/gcp-mcp
+        target: /tokens
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      CLOUDSDK_AUTH_ACCESS_TOKEN_FILE: /tokens/token
+    working_dir: /app
+    command:
+      - --listen
+      - 0.0.0.0:8000
+      - --pass-env
+      - GOOGLE_CLOUD_PROJECT
+      - --pass-env
+      - CLOUDSDK_CORE_PROJECT
+      - --pass-env
+      - CLOUDSDK_AUTH_ACCESS_TOKEN_FILE
+      - gcloud
+      - --
+      - pnpm
+      - --dir
+      - /opt/gcp-mcp
+      - exec
+      - gcloud-mcp
+    networks:
+      shared:
+        aliases:
+          - gcloud.mcp.devsbx.internal
+      external: {}
+
+  mcp-atlassian-proxy:
+    build:
+      context: ../../../lib/mcp-proxy
+    image: mcp-proxy:dev
+    hostname: atlassian.mcp.devsbx.internal
+    volumes:
+      - type: bind
+        source: ${HOME}/.cache/devsbx/mcp-atlassian
+        target: /data
+        bind:
+          create_host_path: false
+    # 初回 OAuth 認可時のみホストブラウザから到達する必要がある。
+    # shared-infra は 1 stack だけ常駐する前提で、host port 3030 は直 publish できる
+    # (per-task workspace を並列起動しても mcp-atlassian-proxy は shared-infra に
+    # 1 つだけのため取り合いが発生しない。single-workspace との同時起動は別途排他)。
+    ports:
+      - "127.0.0.1:3030:3030"
+    # --callback-listen 0.0.0.0:3030 は host port publish 経由の到達のため明示
+    # (default 127.0.0.1:3030 は container 内 loopback のみで bind するため、Docker NAT
+    # 経由で host から 127.0.0.1:3030 を叩いても container の eth0 には届かない)。
+    command:
+      - --listen
+      - 0.0.0.0:8000
+      - -t
+      - http
+      - --oauth
+      - --callback-listen
+      - 0.0.0.0:3030
+      - --token-store
+      - /data
+      - atlassian
+      - https://mcp.atlassian.com/v1/mcp/authv2
+    networks:
+      shared:
+        aliases:
+          - atlassian.mcp.devsbx.internal
+      external: {}
+
+networks:
+  # shared 1 network 統合 (mcp / mitm-proxy / inbound を分けない)。
+  # workspace 間の到達可能性は個人開発前提で許容 (integrated/multi-workspace/README.md 参照)。
+  # `name:` を明示することで shared-infra 側の compose project name (`-p devsbx-infra`) に依存せず
+  # per-task workspace から `external: true + name: devsbx-shared` で参照可能。
+  shared:
+    internal: true
+    name: devsbx-shared
+  # 各 service の外向き通信 + ingress のポート公開に必要な外部疎通用の bridge network。
+  external:
+    name: devsbx-external
+
+volumes:
+  # mitmproxy の CA 秘密鍵を永続化する named volume。
+  # 初回起動時に mitmproxy が自動生成し、以降は再利用される。
+  # workspace コンテナからは mount しないため CA 秘密鍵は workspace に届かない。
+  mitm-ca:

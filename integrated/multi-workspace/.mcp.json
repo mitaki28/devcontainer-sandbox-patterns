@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "http://github.mcp.devsbx.internal:8000/mcp"
+    },
+    "atlassian": {
+      "type": "http",
+      "url": "http://atlassian.mcp.devsbx.internal:8000/mcp"
+    },
+    "context7": {
+      "type": "http",
+      "url": "http://context7.mcp.devsbx.internal:8000/mcp"
+    },
+    "gcloud": {
+      "type": "http",
+      "url": "http://gcloud.mcp.devsbx.internal:8000/mcp"
+    }
+  }
+}

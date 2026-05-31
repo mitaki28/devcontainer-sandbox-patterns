@@ -1,0 +1,32 @@
+# shared ingress の単体検証用 compose project。
+#
+# 本 recipe では「shared な ingress + 並列で起動する N 個の per-task workspace」を
+# 別 compose project として独立に立ち上げ、wildcard subdomain + Docker DNS による
+# 静的 routing が並列で機能することを実証する。
+#
+# 起動: `docker compose -p shared-ingress-test up -d`
+# (本 recipe 直下からは `docker compose -f ingress/compose.yaml -p shared-ingress-test up -d`)
+
+services:
+  ingress:
+    build: .
+    image: ingress-multi-workspace-ingress:dev
+    # internal: true (shared) 単独だとポート公開が効かないため、ingress を外部疎通を持つ
+    # external 側にも所属させる (詳細は recipes/ingress-single-workspace/README.md)。
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - shared
+      - external
+
+networks:
+  # shared: ingress と全 workspace が join する 1 network。
+  # 本番 shared-infra (integrated/multi-workspace/) は `devsbx-shared` 名で同種の network を
+  # 提供しており、単体検証 recipe では recipe path scope の namespace で本番と分離する。
+  # 命名規約: `devsbx-recipe-<path-with-hyphens>-<role>`
+  shared:
+    internal: true
+    name: devsbx-recipe-ingress-multi-workspace
+  # external: ポート公開に必要な外部疎通を持つ非 internal bridge。
+  external:
+    name: devsbx-recipe-ingress-multi-workspace-external

@@ -1,0 +1,23 @@
+services:
+  proxy:
+    build:
+      context: ../../..
+    image: mcp-proxy:dev
+    # ホストから手動で curl 等で叩くための公開（smoke 自体には不要）。
+    ports:
+      - "127.0.0.1:8800:8000"
+    command:
+      - --listen
+      - 0.0.0.0:8000
+      - echo
+      - --
+      - node
+      - /app/test/mocks/echo-mcp.ts
+
+  smoke:
+    image: mcp-proxy:dev
+    entrypoint: ["node", "--test", "test/smoke/echo/smoke.test.ts"]
+    environment:
+      PROXY_URL: http://proxy:8000/mcp
+    depends_on:
+      - proxy

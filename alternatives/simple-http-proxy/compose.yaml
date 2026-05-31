@@ -1,0 +1,33 @@
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.squid
+    image: simple-http-proxy-squid:dev
+    networks:
+      - internal-net
+      - external-net
+
+  workspace:
+    image: mcr.microsoft.com/devcontainers/base:trixie@sha256:e389149057371298eaeb72e736fc2c4dcb79974de222dd471d2e6d675d2f61c4
+    command: sleep infinity
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+    # workspace は internal-net しか持たない。proxy 設定を無視して直 socket
+    # しても外部 IP に到達する経路自体が無い (Docker network に gateway 無し)。
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      NO_PROXY: ""
+    networks:
+      - internal-net
+    depends_on:
+      - proxy
+
+networks:
+  # workspace を閉じ込める側。internal: true で gateway 無し。
+  internal-net:
+    internal: true
+  # proxy だけが外に出るための network。
+  external-net:

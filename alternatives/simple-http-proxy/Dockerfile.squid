@@ -1,0 +1,33 @@
+FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        squid-openssl \
+        ca-certificates \
+        openssl && \
+    rm -rf /var/lib/apt/lists/*
+
+# CA 自己署名 cert を build 時に生成。splice-only 構成 (TLS 復号せず透過 forward)
+# では client に提示されず、workspace 側の CA 配布は不要だが、ssl_bump モードの
+# http_port 設定で cert=/key= 指定が必須なため一式置く。
+RUN mkdir -p /etc/squid/ssl_cert && \
+    openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
+        -keyout /etc/squid/ssl_cert/squid-ca.key \
+        -out /etc/squid/ssl_cert/squid-ca.crt \
+        -subj "/CN=simple-http-proxy internal CA (splice-only)" && \
+    chown -R proxy:proxy /etc/squid/ssl_cert && \
+    chmod 700 /etc/squid/ssl_cert && \
+    chmod 600 /etc/squid/ssl_cert/squid-ca.key
+
+# ssl_db: splice-only 構成では dynamic cert 生成は走らないが、ssl_bump モードの
+# 起動時の整合性チェックで sslcrtd_program が指す DB が必要なため初期化しておく。
+RUN /usr/lib/squid/security_file_certgen -c -s /var/spool/squid/ssl_db -M 4MB && \
+    chown -R proxy:proxy /var/spool/squid/ssl_db
+
+COPY squid.conf /etc/squid/squid.conf
+COPY allowed-hosts.txt /etc/squid/allowed-hosts.txt
+
+EXPOSE 3128
+
+# foreground 起動 + 標準エラーへのログ出力
+CMD ["squid", "-N", "-d", "1"]

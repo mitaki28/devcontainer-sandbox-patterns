@@ -1,0 +1,9 @@
+{
+  "name": "single-workspace",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "node",
+  "// postCreateCommand": "依存解決は runtime に走らせる方針 (registry.npmjs.org は mitmproxy の read-only 許可で通る)。docker compose up 経由起動の場合は手動で `docker compose exec workspace pnpm install` を打つ。",
+  "postCreateCommand": "pnpm install"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "cloud-mcp-with-short-lived-credential",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace"
+}

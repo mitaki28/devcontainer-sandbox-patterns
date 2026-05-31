@@ -1,0 +1,117 @@
+# lib/mitm-proxy/test/ smoke 専用 stack。production の compose.yaml とは独立して立てる:
+#   docker compose -f test/compose.yaml up --build --abort-on-container-exit smoke
+#
+# 攻撃的なトラフィック (CONNECT 詐称等) を打つため、production stack と
+# compose project ごと完全に分離する。proxy の Dockerfile.mitmproxy / addons / bootstrap-ca.sh は
+# build context (../) 共有で production と同一物を参照し、構成が乖離しない。
+# policy.json は smoke 用 (test/policy.smoke.json) を bind mount で
+# /etc/mitm-proxy/policy.json に被せて差し替える。
+#
+# internal-net / external-net 共に internal: true なので、smoke 中の正常系 / 詐称試行は
+# 一切外部に到達しない (mock-target は Docker network alias で .test TLD の仮想 host 名を受ける)。
+# mitmproxy 側で upstream cert (mock-target.crt) を --set ssl_verify_upstream_trusted_ca で
+# trust させ、client (smoke) は通常通り mitmproxy CA を bootstrap で trust する。
+services:
+  mock-target:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    image: lib-mitm-proxy-mock:dev
+    volumes:
+      - mock-certs:/certs
+    networks:
+      external-net:
+        # mock-target を仮想 host として複数 alias で受ける。cert の SAN にも
+        # 同じ host 名一覧が入っており、proxy の upstream cert 検証が通る。
+        # RFC 6761 で予約された .test TLD を使うことで、実 DNS では resolve せず、
+        # smoke 専用の仮想 host であることを明示する (alternatives/simple-http-proxy/ と同じ慣行)。
+        # 各 alias の役割は test/policy.smoke.json の _doc_aliases を参照。
+        aliases:
+          - api.test
+          - registry.test
+          - echo.test
+          - raw.content.test
+          - denied.test
+          - git.test
+    healthcheck:
+      test: ["CMD", "test", "-f", "/certs/.ready"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  mitmproxy:
+    build:
+      context: ..
+      dockerfile: Dockerfile.mitmproxy
+    image: lib-mitm-proxy:dev
+    # production の command を踏襲しつつ、smoke では mock の自己署名 cert を
+    # upstream として trust させるため --set ssl_verify_upstream_trusted_ca を足す。
+    command:
+      - mitmdump
+      - --listen-host
+      - 0.0.0.0
+      - --listen-port
+      - "8080"
+      - -s
+      - /addons/policy.py
+      - --set
+      - ssl_verify_upstream_trusted_ca=/certs/mock-target.crt
+    volumes:
+      # CA 秘密鍵は smoke ごとに使い捨てで良いため named volume を持たせない
+      # (起動時に mitmproxy が ~/.mitmproxy/ に自動生成する)。
+      # smoke 用 policy で production の policy.example.json を覆す。
+      - ./policy.smoke.json:/etc/mitm-proxy/policy.json:ro
+      # mock-target が openssl で生成した cert を mitmproxy が upstream trust 用に読む。
+      - mock-certs:/certs:ro
+    networks:
+      - internal-net
+      - external-net
+    depends_on:
+      mock-target:
+        # mitmproxy 起動時に /certs/mock-target.crt が必要 (起動オプションで読む) なので、
+        # mock-target が cert を書き終わるまで待つ。
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - test
+        - -f
+        - /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  smoke:
+    build:
+      context: ..
+      dockerfile: Dockerfile.workspace
+    image: lib-mitm-proxy-workspace:dev
+    environment:
+      HTTP_PROXY: http://mitmproxy:8080
+      HTTPS_PROXY: http://mitmproxy:8080
+      NO_PROXY: localhost,127.0.0.1
+      # fetch が HTTPS_PROXY env を見て proxy 経由になるように。
+      NODE_USE_ENV_PROXY: "1"
+    networks:
+      - internal-net
+    depends_on:
+      mitmproxy:
+        condition: service_healthy
+    volumes:
+      - .:/app/test:ro
+    command: ["node", "--test", "--test-timeout=30000", "test/smoke.test.ts"]
+
+networks:
+  # smoke ↔ mitmproxy 用。production と同じく internal: true で gateway 無し。
+  internal-net:
+    internal: true
+  # mitmproxy ↔ mock-target 用。production では外向きだが、smoke では
+  # 詐称トラフィックを打つため一切外部に出ないよう internal: true にする
+  # (mock-target は Docker network alias で実 host 名を受ける)。
+  external-net:
+    internal: true
+
+volumes:
+  mock-certs:

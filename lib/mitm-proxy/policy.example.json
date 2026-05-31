@@ -1,0 +1,34 @@
+{
+  "_doc_top": "lib/mitm-proxy/ の policy.json サンプル。POLICY_FILE env で path 指定。`_doc*` は読み飛ばされるコメント。secret は ${VAR} で env から interpolate される。",
+  "_doc_glob": "host glob: `*` は 1 ラベル (`.` 跨がない、TLS ワイルドカード証明書と同じ慣行)。2 ラベル subdomain には `*.*.example.com` を書く。path glob: `*` は 1 segment (`/` 跨がない)、`**` で `/` 跨ぐ (file glob の慣行)、`?` は 1 文字。",
+  "_doc_readonly_hosts": "GET / HEAD / OPTIONS のみ通す read-only な許可区分。exact + host glob の hybrid (`*` `?` を含む entry が glob 扱い)。bare hostname は別 entry が要る (`*.github.com` は github.com に match しない)。github.com への git transport は recipes/git-gateway/ 経由が前提のため、ここでは readonly_hosts に github.com / codeload.github.com を含めない (lib/mitm-proxy/ は read-only 許可を主とする最小構成)。",
+  "_doc_trusted_hosts": "全 method 素通し (Claude Code 自身の egress など)。method ACL を skip するため、本当に signed write が要る endpoint だけに絞ること。",
+  "_doc_allow_rules": "(host, path, method, query) の matcher list。readonly_hosts より先に評価される個別許可。pnpm audit のような副作用のない POST や、特定 endpoint だけ write を許したいケースに使う。path で `/` 跨ぎたい時は `**` を使う。`_doc` 等の追加 key は無視される。",
+  "trusted_hosts": [],
+  "readonly_hosts": [
+    "api.github.com",
+    "registry.npmjs.org",
+    "httpbin.org",
+    "*.githubusercontent.com"
+  ],
+  "allow_rules": [
+    {
+      "_doc": "smoke 用のサンプル。httpbin.org/anything/* は受け取った request を echo back する性質を使い、readonly_hosts に居る host への POST を allow_rules で個別に許可して通すことを検証する。path は意図的に意味の無い `/foo` を選んでおり、実用ルールではない。実用時は削除可。",
+      "host": "httpbin.org",
+      "path": "/anything/foo",
+      "method": "POST"
+    }
+  ],
+  "header_inject": [
+    {
+      "_doc": "smoke 用のサンプル。httpbin.org/headers が echo back する性質を使って HeaderInjector が機能していることを検証する。実用時は削除可。",
+      "match": {"host": "httpbin.org", "path": "/headers"},
+      "headers": {"X-Mitm-Proxy-Test": "smoke-injected"}
+    },
+    {
+      "_doc": "private registry の例（コメントアウト相当、host が空なので何にもマッチしない）。実用時はこの形式で host/path を埋める。",
+      "match": {"host": ""},
+      "headers": {"Authorization": "Bearer ${EXAMPLE_REGISTRY_TOKEN}"}
+    }
+  ]
+}

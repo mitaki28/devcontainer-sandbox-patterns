@@ -1,0 +1,10 @@
+# alternatives/simple-http-proxy/ allowlist の host list。
+# squid.conf の dstdomain (CONNECT level) と ssl::server_name --client-requested
+# (SNI level) の両方から参照される単一ソース。
+#
+# dstdomain / ssl::server_name の規則:
+#   `.example.com` 形式は example.com とその subdomain (foo.example.com 等) に match。
+#   bare hostname (`example.com` のみ) は example.com 単独にだけ match (subdomain には及ばない)。
+.github.com
+.githubusercontent.com
+.npmjs.org

@@ -1,0 +1,62 @@
+# per-task workspace の compose project。
+#
+# 起動: `docker compose -p <task> up -d`
+# (`<task>` は subdomain 制約に従う lowercase + ハイフンのみ。例: `task-auth`)
+#
+# 事前に shared-infra (integrated/multi-workspace/shared-infra/) が起動している必要がある:
+#   cd shared-infra && docker compose -p devsbx-infra up -d
+#
+# `devsbx-shared` network を `external: true + name:` で参照しているため、shared-infra 不在では
+# 起動 fail する (これは起動時点で失敗するのが妥当な挙動)。
+#
+# 各 task で独立した内部 network (`<task>_internal`) は compose default 命名で
+# 自動的に切り出される (per-stack の egress 遮断)。
+
+services:
+  workspace:
+    build:
+      # build context = repo root。lib/mitm-proxy/bootstrap-ca.sh を Dockerfile から COPY するため。
+      context: ../..
+      dockerfile: integrated/multi-workspace/Dockerfile
+    image: multi-workspace-workspace:dev
+    command: sleep infinity
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:cached
+      # node_modules は bind mount から隔離して named volume に逃がす (cross-fs fallback 回避)。
+      - workspace_node_modules:/workspace/node_modules
+      # pnpm の content-addressable store。
+      - workspace_pnpm_store:/pnpm-store
+      # Claude Code の config / 認証情報を host bind mount で永続化する。
+      # 全 workspace と共通の path に bind (task 間で login 状態を共有する形)。
+      - ~/.config/devsbx/claude:/home/node/.claude
+    environment:
+      # workspace は <task>_internal だけが per-stack で、shared に乗って外に出る。
+      # mitmproxy は shared-infra 側で `mitmproxy.devsbx.internal` alias を持つ。
+      HTTPS_PROXY: http://mitmproxy.devsbx.internal:8080
+      HTTP_PROXY: http://mitmproxy.devsbx.internal:8080
+      # `.devsbx.internal` 規約で各 internal service への request は proxy bypass。
+      NO_PROXY: localhost,127.0.0.1,.devsbx.internal
+      npm_config_store_dir: /pnpm-store
+      npm_config_package_import_method: copy
+      CLAUDE_CONFIG_DIR: /home/node/.claude
+    networks:
+      # internal: per-stack の egress 遮断 (compose default 命名 = <project>_internal)
+      internal: {}
+      # shared: shared-infra 側 devsbx-shared への参加経路。
+      # alias を <task>-workspace に固定することで shared ingress (Caddy) の
+      # `{re.host.name}-workspace:3000` upstream pattern と整合する。
+      shared:
+        aliases:
+          - ${COMPOSE_PROJECT_NAME}-workspace
+
+networks:
+  internal:
+    internal: true
+  shared:
+    external: true
+    name: devsbx-shared
+
+volumes:
+  workspace_node_modules:
+  workspace_pnpm_store:

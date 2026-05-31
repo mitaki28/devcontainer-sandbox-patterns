@@ -1,0 +1,33 @@
+services:
+  ingress:
+    build:
+      context: ./ingress
+    image: ingress-single-workspace-ingress:dev
+    # internal: true 単独所属だとポート公開が効かないため、ingress を外部疎通を持つ
+    # external 側にも所属させる (詳細は README の
+    # "ingress を internal/external 両所属にしている理由" 参照)。
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8080}:80"
+    networks:
+      - internal
+      - external
+
+  workspace:
+    image: mcr.microsoft.com/devcontainers/base:trixie@sha256:e389149057371298eaeb72e736fc2c4dcb79974de222dd471d2e6d675d2f61c4
+    command: sleep infinity
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:cached
+    # workspace は internal のみ。host から直接到達する経路は無く、
+    # ingress 経由 (Host header routing) でしか触れない。
+    networks:
+      - internal
+    depends_on:
+      - ingress
+
+networks:
+  # workspace と ingress が同居する側。internal: true で gateway 無し。
+  internal:
+    internal: true
+  # ingress だけが居る側。ポート公開に必要な外部疎通を持つ bridge。
+  external:

@@ -1,0 +1,6 @@
+# 注: OAuth tokens は ${HOME}/.cache/devsbx/mcp-atlassian/ に
+# 置く設計（compose.yaml 参照）。recipe ディレクトリ内には一切保存しないため、
+# 個別の ignore は基本不要。以下は誤って .env を作った場合の保険。
+.env
+.env.local
+.env.*.local

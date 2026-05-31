@@ -1,0 +1,13 @@
+FROM node:22-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732
+
+# openssl は self-signed cert 生成用 (mock-entrypoint.sh が起動時に都度生成する)。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openssl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY mock-server.ts /app/mock-server.ts
+COPY mock-entrypoint.sh /app/mock-entrypoint.sh
+RUN chmod +x /app/mock-entrypoint.sh
+
+ENTRYPOINT ["/app/mock-entrypoint.sh"]

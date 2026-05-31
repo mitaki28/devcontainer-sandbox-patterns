@@ -1,0 +1,149 @@
+# alternatives/git-mitm-proxy-addon/test/ smoke 専用 stack。
+# production の compose.yaml とは独立して立てる:
+#   docker compose -f test/compose.yaml run --rm --build smoke
+#
+# lib/mitm-proxy/test/compose.yaml と同型の自己完結 stack。production stack と
+# compose project ごと完全に分離する。mitm-github image は production と同じ
+# Dockerfile / build context (repo root) を共有し、構成が乖離しない。
+#
+# internal-net / external-net 共に internal: true なので、smoke 中の正常系 / 詐称試行は
+# 一切外部に到達しない。mock-upstream を Docker network alias で `github.com` として受け、
+# マクロ (macros/github.py) の GIT_HOSTS = ("github.com",) を一切触らずに hijack する。
+# api.github.com 等の他 domain はマクロの責務範囲外 (CommonPolicy readonly_hosts で扱う) で
+# lib/mitm-proxy/ 本家 smoke と機能が重なるため本 smoke では取り上げない。
+# mitm-github 側で upstream cert (mock-upstream.crt) を --set ssl_verify_upstream_trusted_ca で
+# trust させ、client (smoke) は通常通り mitmproxy CA を bootstrap で trust する。
+#
+# smoke 用 PAT は 3 service 間で literal 共有する (mitm-github.GITHUB_PAT /
+# mock-upstream.EXPECT_PAT / smoke.SMOKE_PAT)。ズレると mock の 401 challenge で
+# 即座に検知される。production の env_file (~/.config/devsbx/mitm-github.env) は
+# 本 stack では読まない (smoke 用の dummy PAT で完結させる)。
+services:
+  mock-upstream:
+    build:
+      context: ./mock-upstream
+    image: git-mitm-proxy-addon-mock-upstream:dev
+    environment:
+      # smoke で叩く repo:
+      #   - octocat/Hello-World: fetch path として叩く (非 ALLOWED_PUSH_REPOS)
+      #   - smoke-org/repo:      push 成功 path として叩く (ALLOWED_PUSH_REPOS 内)
+      MOCK_REPOS: "octocat/Hello-World,smoke-org/repo"
+      # fetch / push 両経路で「PAT が確実に注入されている」ことを mock 側 401 で構造的に
+      # 検証する。注入されていないと smoke の case 1 / 6 / 7 が落ちる。
+      EXPECT_PAT_FOR_REPOS: "octocat/Hello-World,smoke-org/repo"
+      EXPECT_PAT: "ghp_smoke_test_pat"
+      # マクロは github.com の全 git transport に PAT を注入する header_inject を生成するため、
+      # FORBID_PAT_FOR_REPOS (strip 不変条件) の対象 path は存在しない。
+    volumes:
+      - mock-certs:/certs
+    networks:
+      external-net:
+        # addon の GIT_HOSTS = {"github.com"} を alias で hijack。RFC 6761 の .test ではなく
+        # 実 hostname を使うのは、本 recipe の主要関心が「addon が github.com を識別すること」
+        # 自体だから (lib/mitm-proxy/test の .test 流儀とは趣旨が異なる)。external-net は
+        # internal: true なので、本 alias は smoke stack 内でしか resolve せず実 internet にも
+        # 到達しない。
+        aliases:
+          - github.com
+    healthcheck:
+      # entrypoint.sh が openssl cert 生成 + fcgiwrap + caddy :443 listen 完了の
+      # 全てが揃ったタイミングで /certs/.ready を touch する。mitm-github は起動時に
+      # cert を読み即 upstream connect を始め得るので、listen 完了前に release されると flaky。
+      test: ["CMD", "test", "-f", "/certs/.ready"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  mitm-github:
+    build:
+      # production と同じ build context (repo root)。Dockerfile も同一で
+      # lib/mitm-proxy/addons + macros/github.py を /addons に重ねる。
+      context: ../../..
+      dockerfile: alternatives/git-mitm-proxy-addon/Dockerfile
+    image: mitm-github:dev
+    # production の command を踏襲しつつ、smoke では mock の自己署名 cert を
+    # upstream として trust させるため --set ssl_verify_upstream_trusted_ca を足す。
+    command:
+      - mitmdump
+      - --listen-host
+      - 0.0.0.0
+      - --listen-port
+      - "8080"
+      - --set
+      - block_global=false
+      - --set
+      - ssl_verify_upstream_trusted_ca=/certs/mock-upstream.crt
+      - -s
+      - /addons/policy.py
+    environment:
+      POLICY_MACROS: github
+      POLICY_FILE: /etc/mitm-proxy/policy.json
+      # smoke 用に既知の literal PAT を渡す (mock-upstream の EXPECT_PAT と一致)。
+      # production の env_file (~/.config/devsbx/mitm-github.env) は本 stack では読まない。
+      GITHUB_PAT: "ghp_smoke_test_pat"
+      ALLOWED_PUSH_REPOS: "smoke-org/repo"
+    volumes:
+      # CA 秘密鍵は smoke ごとに使い捨てで良いため named volume を持たせない
+      # (起動時に mitmproxy が ~/.mitmproxy/ に自動生成する)。
+      # production の policy.example.json をそのまま smoke でも使う。host 名は alias で
+      # mock に向くので smoke 専用 policy は不要。
+      - ../policy.example.json:/etc/mitm-proxy/policy.json:ro
+      # mock-upstream が openssl で生成した cert を mitm-github が upstream trust 用に読む。
+      - mock-certs:/certs:ro
+    networks:
+      - internal-net
+      - external-net
+    depends_on:
+      mock-upstream:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - test
+        - -f
+        - /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  smoke:
+    build:
+      # production の workspace と同じ image (lib/mitm-proxy/Dockerfile.workspace)。
+      # bootstrap-ca.sh が ENTRYPOINT で CA を trust store に入れてから CMD を exec する。
+      context: ../../../lib/mitm-proxy
+      dockerfile: Dockerfile.workspace
+    image: lib-mitm-proxy-workspace:dev
+    environment:
+      HTTP_PROXY: http://mitm-github:8080
+      HTTPS_PROXY: http://mitm-github:8080
+      NO_PROXY: localhost,127.0.0.1
+      # smoke.sh が curl の Authorization 注入テスト (case 8) や、git clone / push の
+      # check で参照する。mock-upstream の EXPECT_PAT と一致させる。
+      SMOKE_PAT: "ghp_smoke_test_pat"
+    networks:
+      # mock-upstream には直接届かない (external-net に居ない)。mitm-github 経由でのみ到達。
+      - internal-net
+    depends_on:
+      mitm-github:
+        condition: service_healthy
+    volumes:
+      - ./:/test:ro
+    # entrypoint: 上書きではなく command: で渡す。bootstrap-ca.sh ENTRYPOINT を残して
+    # CA を trust store に入れた状態で smoke.sh を exec させるため (git CLI の HTTPS 検証
+    # を素直に通すのに必要)。
+    command: ["/test/smoke.sh"]
+
+networks:
+  # smoke ↔ mitm-github 用。production と同じく internal: true で gateway 無し。
+  internal-net:
+    internal: true
+  # mitm-github ↔ mock-upstream 用。production では外向きだが、smoke では一切外部に
+  # 出ないよう internal: true にする (mock-upstream が docker network alias で
+  # github.com 等を受ける)。
+  external-net:
+    internal: true
+
+volumes:
+  mock-certs:

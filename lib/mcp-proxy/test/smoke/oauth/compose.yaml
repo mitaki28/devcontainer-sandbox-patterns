@@ -1,0 +1,39 @@
+services:
+  oauth-mock:
+    image: mcp-proxy:dev
+    build:
+      context: ../../..
+    entrypoint: ["node", "test/mocks/oauth-mock.ts"]
+    environment:
+      PORT: "3000"
+      # compose 内 service hostname。proxy が backend として叩く URL の origin。
+      # ブラウザから手動で開く場合、認可 URL の host を `oauth-mock` → `localhost`
+      # に手で書き換える必要がある（compose ports で 127.0.0.1:3000 に公開）。
+      ISSUER_URL: http://oauth-mock:3000
+      # SDK は localhost/127.0.0.1 以外の HTTP issuer を拒否する。test 用に許可。
+      MCP_DANGEROUSLY_ALLOW_INSECURE_ISSUER_URL: "1"
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  oauth-smoke:
+    image: mcp-proxy:dev
+    build:
+      context: ../../..
+    entrypoint: ["node", "test/smoke/oauth/harness.ts"]
+    environment:
+      OAUTH_BACKEND: http://oauth-mock:3000/mcp
+    depends_on:
+      - oauth-mock
+
+  # `--oauth-refresh-dedup` 付きで harness を回し、dedup が有効でも OAuth flow / tools/list /
+  # tools/call が壊れないことを smoke で確認する variant。
+  oauth-smoke-dedup:
+    image: mcp-proxy:dev
+    build:
+      context: ../../..
+    entrypoint: ["node", "test/smoke/oauth/harness.ts"]
+    environment:
+      OAUTH_BACKEND: http://oauth-mock:3000/mcp
+      OAUTH_REFRESH_DEDUP: "1"
+    depends_on:
+      - oauth-mock

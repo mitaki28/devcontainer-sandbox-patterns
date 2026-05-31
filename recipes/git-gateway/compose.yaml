@@ -1,0 +1,82 @@
+services:
+  # mock-upstream: smoke 専用の上流。production image (gateway) とは独立した image を
+  # test/mock-upstream/ から build する。anonymous receive-pack を許可した bare repo を
+  # 2 つ (smoke-org/repo = 登録 repo の上流、other-org/public = 未登録 repo の上流)
+  # expose し、EXPECT_PAT_FOR_REPOS / EXPECT_PAT に登録した repo path には
+  # Authorization: Basic <expected> を要求、FORBID_PAT_FOR_REPOS に登録した path には
+  # Authorization が付いていたら 401 を返すことで、PAT 注入と PAT strip の不変条件を
+  # smoke 内で構造的に検証する。
+  mock-upstream:
+    build:
+      context: ./test/mock-upstream
+    image: git-gateway-mock-upstream:dev
+    environment:
+      MOCK_REPOS: "smoke-org/repo,other-org/public"
+      # smoke で gateway → mock 間の PAT 注入を実際に検証する。
+      # gateway の GITHUB_PAT と同じ値を共有する (smoke 用のダミー)。
+      EXPECT_PAT_FOR_REPOS: "smoke-org/repo"
+      EXPECT_PAT: "ghp_smoke_test_pat"
+      # 未登録 repo の anonymous fetch 経路に PAT が乗っていないことの確認用。
+      FORBID_PAT_FOR_REPOS: "other-org/public"
+    networks:
+      - internal
+
+  # git-gateway: workspace の git transport の単一窓口。
+  # 登録 repo (ALLOWED_REPOS) の fetch は Caddy が reverse_proxy + PAT ヘッダ注入、
+  # push は fcgiwrap 経由で git-http-backend を実行 → pre-receive で上流に転送。
+  # 未登録 repo は anonymous fetch passthrough のみ許可、push は 403。
+  git-gateway:
+    build:
+      context: ./gateway
+    image: git-gateway-server:dev
+    environment:
+      UPSTREAM_BASE_URL: http://mock-upstream:8080/
+      ALLOWED_REPOS: "smoke-org/repo"
+      DENIED_REF_PATTERNS: "refs/heads/main"
+      DISABLE_POST_RECEIVE_SYNC: "1"
+      # smoke の PAT。mock-upstream の EXPECT_PAT と一致する必要がある。
+      # 本番統合時は env_file 経由で実 GITHUB_PAT を渡す。
+      GITHUB_PAT: "ghp_smoke_test_pat"
+    networks:
+      - internal
+    depends_on:
+      - mock-upstream
+
+  # workspace: devcontainer の本体。github.com への全 git 操作が
+  # workspace/gitconfig の insteadOf で git-gateway:8080 に書き換わる。
+  workspace:
+    build:
+      context: ./workspace
+    image: git-gateway-workspace:dev
+    command: sleep infinity
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:cached
+    networks:
+      - internal
+    depends_on:
+      - git-gateway
+      - mock-upstream
+
+  smoke:
+    build:
+      context: ./workspace
+    image: git-gateway-workspace:dev
+    entrypoint: ["/test/smoke.sh"]
+    environment:
+      # smoke 内の direct ops (mock-upstream への seed push 等) に使う PAT。
+      # mock-upstream の EXPECT_PAT と一致する必要がある。
+      SMOKE_PAT: "ghp_smoke_test_pat"
+    volumes:
+      - ./test:/test:ro
+    networks:
+      - internal
+    depends_on:
+      - git-gateway
+      - mock-upstream
+
+networks:
+  internal:
+    # workspace から外向き egress を Docker ネットワーク設定で塞ぐ。smoke 単独 recipe では
+    # mock-upstream / git-gateway も同 network 内に居るので internal: true で完結する。
+    internal: true

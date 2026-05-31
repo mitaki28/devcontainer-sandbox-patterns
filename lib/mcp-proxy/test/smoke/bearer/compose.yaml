@@ -1,0 +1,37 @@
+services:
+  bearer-mock:
+    image: mcp-proxy:dev
+    build:
+      context: ../../..
+    entrypoint: ["node", "test/mocks/bearer-mock.ts"]
+    environment:
+      BEARER_TOKEN: backend-secret
+      PORT: "3000"
+
+  bearer-proxy:
+    image: mcp-proxy:dev
+    build:
+      context: ../../..
+    entrypoint:
+      - node
+      - src/index.ts
+      - --listen
+      - 0.0.0.0:8000
+      - -t
+      - http
+      - -H
+      - "Authorization: Bearer backend-secret"
+      - bearer
+      - http://bearer-mock:3000/mcp
+    depends_on:
+      - bearer-mock
+
+  # bearer 経路は echo backend と protocol レベルでは同一なので、smoke test 本体は
+  # echo の smoke.test.ts (PROXY_URL を差し替えるだけ) を流用する。
+  bearer-smoke:
+    image: mcp-proxy:dev
+    entrypoint: ["node", "--test", "test/smoke/echo/smoke.test.ts"]
+    environment:
+      PROXY_URL: http://bearer-proxy:8000/mcp
+    depends_on:
+      - bearer-proxy

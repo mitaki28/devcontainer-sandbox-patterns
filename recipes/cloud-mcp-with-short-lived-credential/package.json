@@ -1,0 +1,10 @@
+{
+  "name": "gcp-mcp-host",
+  "version": "0.0.0",
+  "private": true,
+  "description": "gcloud-mcp を pin install するための host project（recipes/cloud-mcp-with-short-lived-credential/Dockerfile.gcloud-mcp が build-time に install する）",
+  "packageManager": "pnpm@10.33.2",
+  "dependencies": {
+    "@google-cloud/gcloud-mcp": "0.5.3"
+  }
+}

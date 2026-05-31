@@ -1,0 +1,24 @@
+services:
+  filter-proxy:
+    image: mcp-proxy:dev
+    build:
+      context: ../../..
+    entrypoint:
+      - node
+      - src/index.ts
+      - --listen
+      - 0.0.0.0:8000
+      - --deny-tool
+      - "delete_*"
+      - multi-tool
+      - --
+      - node
+      - /app/test/smoke/filter/multi-tool-mcp.ts
+
+  filter-smoke:
+    image: mcp-proxy:dev
+    entrypoint: ["node", "--test", "test/smoke/filter/smoke.test.ts"]
+    environment:
+      PROXY_URL: http://filter-proxy:8000/mcp
+    depends_on:
+      - filter-proxy

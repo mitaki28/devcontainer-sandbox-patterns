@@ -1,0 +1,55 @@
+services:
+  proxy:
+    build:
+      context: ../..
+    image: mcp-proxy:dev
+    # ホストから手動で curl 等で叩くための公開（smoke 自体には不要）。
+    # localhost bind なので外部ホストからは到達しない。
+    ports:
+      - "127.0.0.1:8810:8000"
+    # GitHub PAT は recipe ディレクトリ外（ホームの .config 配下）から読み込む。
+    # workspace の bind mount (.:/workspace) からは分離される。
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-github.env
+        required: true
+    # docker compose の ${VAR} は parse 時に host env から展開されてしまうため、
+    # コンテナ内 env (env_file 由来) を引数に渡すには shell 経由で展開する必要がある。
+    # `$$GITHUB_PAT` は compose レベルで `$GITHUB_PAT` にエスケープされ、
+    # コンテナ内 sh が env_file の値で展開する。
+    entrypoint: ["/bin/sh", "-c", "--"]
+    # tool フィルタ:「destructive 系を deny」プロファイル。
+    # GitHub MCP の tool 名は upstream で増減するため、運用上は定期的に
+    # `tools/list` の実出力と突き合わせて見直すこと（README 参照）。
+    #   delete_*   : delete_file / delete_pending_pull_request_review / delete_workflow_run_logs
+    #   merge_*    : merge_pull_request
+    #   push_*     : push_files
+    command:
+      - >
+        exec node src/index.ts --listen 0.0.0.0:8000 -t http
+        -H "Authorization: Bearer $$GITHUB_PAT"
+        --deny-tool 'delete_*'
+        --deny-tool 'merge_*'
+        --deny-tool 'push_*'
+        github https://api.githubcopilot.com/mcp/
+
+  smoke:
+    image: mcp-proxy:dev
+    build:
+      context: ../..
+    entrypoint: ["node", "--test", "test-recipes/github-smoke.test.ts"]
+    environment:
+      PROXY_URL: http://proxy:8000/mcp
+    volumes:
+      - ./test:/app/test-recipes:ro
+    depends_on:
+      - proxy
+
+  workspace:
+    image: mcr.microsoft.com/devcontainers/base:trixie@sha256:e389149057371298eaeb72e736fc2c4dcb79974de222dd471d2e6d675d2f61c4
+    command: sleep infinity
+    volumes:
+      - .:/workspace:cached
+    working_dir: /workspace
+    # GITHUB_PAT は渡さない。workspace は Docker ネットワーク経由で proxy に到達する。
+    depends_on:
+      - proxy

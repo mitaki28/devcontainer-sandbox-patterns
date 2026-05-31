@@ -1,0 +1,16 @@
+# 注: 実値の env file は ~/.config/devsbx/<name>.env、
+# OAuth tokens は ~/.cache/devsbx/mcp-atlassian/ に置く設計
+# （compose.yaml 参照）。recipe ディレクトリ内には認証情報を一切保存しないため、
+# 以下は誤って .env を作った場合の保険。
+.env
+.env.local
+.env.*.local
+
+# pnpm install は runtime に走り、container 内では named volume `workspace_node_modules` で
+# 覆われるが、bind mount 経由で host 側に空 directory や残骸が残ることがあるため保険として ignore。
+node_modules/
+
+# pnpm のローカルキャッシュ。compose.yaml で named volume 上の固定 path (`/pnpm-store`) に
+# 明示しているが、設定漏れで cross-filesystem fallback が走った場合の保険で除外。
+# (alternatives/dependencies-build-time/.gitignore と同方式)
+.pnpm-store/

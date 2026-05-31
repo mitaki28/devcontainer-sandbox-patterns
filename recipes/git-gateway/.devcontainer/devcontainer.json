@@ -1,0 +1,6 @@
+{
+  "name": "git-isolated-gateway",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace"
+}

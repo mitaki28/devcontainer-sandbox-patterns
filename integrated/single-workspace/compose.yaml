@@ -1,0 +1,351 @@
+services:
+  # ----- 外向き egress を担当する proxy 系 -----
+  #
+  # 構成: 2 基本パーツ (mcp-proxy = 操作粒度 / mitm-proxy = read-only 許可) +
+  # 用途特化のカスタム proxy (git-gateway = github.com 向け git transport の単一窓口、
+  # ref/branch + ALLOWED_REPOS で ACL) の合計 3 種類。
+  # workspace は internal: true ネットワークしか持たず、以下経路でしか外に出られない。
+
+  # git-gateway: github.com への git transport の単一窓口。
+  # 詳細は recipes/git-gateway/README.md (read+write 統合 gateway)。
+  # workspace は /etc/gitconfig の insteadOf で github.com → git-gateway:8080 に書き換わるため、
+  # すべての git 操作がここを通る。
+  # ALLOWED_REPOS / GITHUB_PAT / ALLOWED_REF_PATTERNS / DENIED_REF_PATTERNS は
+  # env_file (`~/.config/devsbx/git-gateway.env`) から受け取る。
+  git-gateway:
+    build:
+      context: ../../recipes/git-gateway/gateway
+    image: git-gateway-server:dev
+    environment:
+      UPSTREAM_BASE_URL: https://github.com/
+    env_file:
+      - path: ${HOME}/.config/devsbx/git-gateway.env
+        required: false
+    networks:
+      internal:
+        aliases:
+          - git-gateway.devsbx.internal
+      external: {}
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - -o
+        - /dev/null
+        - http://localhost:8080/_health
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  # mitm-proxy: TLS 終端 + read-only 許可 + hostname allowlist。
+  # addon は lib/mitm-proxy/addons/ を bind mount で再利用 (build しない)。policy は recipe 固有。
+  mitmproxy:
+    # floating tag 経由の差し替えで PAT / CA 鍵を読める Python プロセスが置き換わるのを避けるため
+    # digest pin (integrated/multi-workspace/shared-infra/compose.yaml と同じ image sha)。
+    # 更新は host で `docker pull mitmproxy/mitmproxy:latest` →
+    # `docker image inspect ... --format '{{index .RepoDigests 0}}'` で digest を取って置換する。
+    image: mitmproxy/mitmproxy@sha256:f4f0f41f5278f284fcc0a306f82849f38ab2e133c1d71d25a42bd06d7ff6928b
+    command:
+      - mitmdump
+      - --listen-host
+      - 0.0.0.0
+      - --listen-port
+      - "8080"
+      - --set
+      - block_global=false
+      - -s
+      - /addons/policy.py
+    volumes:
+      # CA 秘密鍵は named volume に永続化 (workspace 側からは read 不可)。
+      - mitm-ca:/home/mitmproxy/.mitmproxy
+      # addon は lib/mitm-proxy/ のものをそのまま bind。
+      - ../../lib/mitm-proxy/addons:/addons:ro
+      # policy は recipe 固有。trusted_hosts に Claude Code 自身の egress、
+      # readonly_hosts に github / npm registry を入れる。詳細は ./policy.json 参照。
+      - ./policy.json:/etc/mitm-proxy/policy.json:ro
+    environment:
+      POLICY_FILE: /etc/mitm-proxy/policy.json
+    # mitm-proxy.env は default では何も注入しない (read-only 許可 として機能する)。
+    # recipe ごとに header_inject ルールで `${VAR}` を参照する場合のみ secret をここに書く。
+    env_file:
+      - path: ${HOME}/.config/devsbx/mitm-proxy.env
+        required: false
+    networks:
+      internal:
+        aliases:
+          - mitmproxy.devsbx.internal
+      external: {}
+    healthcheck:
+      # CA cert ファイルの存在で「mitmproxy が立ち上がって CA 生成済み」を判定。
+      # workspace の bootstrap-ca.sh が mitm.it/cert/pem を取れる状態の指標として使う。
+      test:
+        - CMD
+        - test
+        - -f
+        - /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  mcp-github-proxy:
+    build:
+      context: ../../lib/mcp-proxy
+    image: mcp-proxy:dev
+    # hostname は `<provider>.mcp.devsbx.internal` 規約 (FQDN suffix で MCP 群一括識別可能)。
+    # service key は alphanumeric + - のままで CLI コマンドの安定性を優先。
+    hostname: github.mcp.devsbx.internal
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-github.env
+        required: true
+    # docker compose の ${VAR} は parse 時に host env から展開されてしまうため、
+    # コンテナ内 env (env_file 由来) を引数に渡すには shell 経由で展開する。
+    entrypoint: ["/bin/sh", "-c", "--"]
+    # tool フィルタは lib/mcp-proxy/examples/api-key/ と同一の「destructive 系 deny」プロファイル。
+    # mitmproxy 側の ALLOWED_PUSH_REPOS と独立に効く defense in depth。
+    # 詳細・運用上の注意は lib/mcp-proxy/examples/api-key/README.md を参照。
+    command:
+      - >
+        exec node src/index.ts --listen 0.0.0.0:8000 -t http
+        -H "Authorization: Bearer $$GITHUB_PAT"
+        --deny-tool 'delete_*'
+        --deny-tool 'merge_*'
+        --deny-tool 'push_*'
+        github https://api.githubcopilot.com/mcp/
+    networks:
+      internal:
+        aliases:
+          - github.mcp.devsbx.internal
+      external: {}
+
+  mcp-context7-proxy:
+    build:
+      context: ../../lib/mcp-proxy
+    image: mcp-proxy:dev
+    hostname: context7.mcp.devsbx.internal
+    # API key は host 側 ~/.config/devsbx/mcp-context7.env に配置。
+    # Context7 は無料枠なら無認証で動くため env_file は required: false。
+    # ファイル不在 / CONTEXT7_API_KEY 未設定なら無認証で起動する (rate limit が厳しくなる)。
+    env_file:
+      - path: ${HOME}/.config/devsbx/mcp-context7.env
+        required: false
+    entrypoint: ["/bin/sh", "-c", "--"]
+    # CONTEXT7_API_KEY が設定されていれば認証ヘッダ付き、無ければヘッダ無しで起動。
+    # ヘッダ名は Context7 公式 docs の通り `CONTEXT7_API_KEY: <key>` (独自名。
+    # Authorization: Bearer ではない)。ref:
+    # https://context7.com/docs/resources/all-client
+    # context7 backend は read-only (resolve-library-id / query-docs) のため
+    # destructive 系の deny は不要。
+    command:
+      - |
+        if [ -n "$$CONTEXT7_API_KEY" ]; then
+          exec node src/index.ts --listen 0.0.0.0:8000 -t http \
+            -H "CONTEXT7_API_KEY: $$CONTEXT7_API_KEY" \
+            context7 https://mcp.context7.com/mcp
+        else
+          exec node src/index.ts --listen 0.0.0.0:8000 -t http \
+            context7 https://mcp.context7.com/mcp
+        fi
+    networks:
+      internal:
+        aliases:
+          - context7.mcp.devsbx.internal
+      external: {}
+
+  # gcloud-mcp を short-lived access token で動かす (recipes/cloud-mcp-with-short-lived-credential/ と同じ方式)。
+  # host 側で `recipes/cloud-mcp-with-short-lived-credential/refresh-token.sh` を 50min 周期で叩き、
+  # 専用サービスアカウントに impersonate した 1h 寿命の access token を /tokens/token に書き出す。
+  # proxy はこれを ro mount で読み、CLOUDSDK_AUTH_ACCESS_TOKEN_FILE 経由で gcloud-mcp に渡す。
+  # cloud を使わない利用者は token dir を作らないだけで OK (この service は起動失敗するが、
+  # depends_on に挙げていないため workspace と他 proxy は影響を受けない)。
+  mcp-gcloud-proxy:
+    build:
+      context: ../..
+      dockerfile: recipes/cloud-mcp-with-short-lived-credential/Dockerfile.gcloud-mcp
+    image: gcp-mcp-proxy:dev
+    hostname: gcloud.mcp.devsbx.internal
+    env_file:
+      - path: ${HOME}/.config/devsbx/gcp-mcp.env
+        required: false
+    volumes:
+      # create_host_path: false で「token dir 未作成だと起動失敗」させ、refresh-token.sh の
+      # 初回実行を fail loud に強制する (recipes/cloud-mcp-with-short-lived-credential/ と同じ意図)。
+      - type: bind
+        source: ${HOME}/.cache/devsbx/gcp-mcp
+        target: /tokens
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      CLOUDSDK_AUTH_ACCESS_TOKEN_FILE: /tokens/token
+    working_dir: /app
+    # IMPERSONATE_SERVICE_ACCOUNT は env_file 由来で proxy の env には入るが、
+    # --pass-env に挙げないため backend (gcloud-mcp) には渡らない (二重 impersonation 防止)。
+    command:
+      - --listen
+      - 0.0.0.0:8000
+      - --pass-env
+      - GOOGLE_CLOUD_PROJECT
+      - --pass-env
+      - CLOUDSDK_CORE_PROJECT
+      - --pass-env
+      - CLOUDSDK_AUTH_ACCESS_TOKEN_FILE
+      - gcloud
+      - --
+      - pnpm
+      - --dir
+      - /opt/gcp-mcp
+      - exec
+      - gcloud-mcp
+    networks:
+      internal:
+        aliases:
+          - gcloud.mcp.devsbx.internal
+      external: {}
+
+  mcp-atlassian-proxy:
+    build:
+      context: ../../lib/mcp-proxy
+    image: mcp-proxy:dev
+    hostname: atlassian.mcp.devsbx.internal
+    volumes:
+      # OAuth tokens / 動的登録された client_id / PKCE verifier を永続化。
+      # workspace の bind mount から分離するため recipe 外に置く。
+      - type: bind
+        source: ${HOME}/.cache/devsbx/mcp-atlassian
+        target: /data
+        bind:
+          create_host_path: false
+    # 初回 OAuth 認可時のみホストブラウザから到達する必要がある。
+    # 認可後はこの port を使わないため、自身のリポジトリに取り込む際は削除してよい。
+    ports:
+      - "127.0.0.1:3030:3030"
+    # --callback-listen 0.0.0.0:3030 は host port publish 経由の到達のため明示
+    # (default 127.0.0.1:3030 は container 内 loopback のみで bind するため、Docker NAT
+    # 経由で host から 127.0.0.1:3030 を叩いても container の eth0 には届かない)。
+    command:
+      - --listen
+      - 0.0.0.0:8000
+      - -t
+      - http
+      - --oauth
+      - --callback-listen
+      - 0.0.0.0:3030
+      - --token-store
+      - /data
+      - atlassian
+      - https://mcp.atlassian.com/v1/mcp/authv2
+    networks:
+      internal:
+        aliases:
+          - atlassian.mcp.devsbx.internal
+      external: {}
+
+  # ----- inbound 軸: ホストブラウザ → workspace の dev artifact -----
+  #
+  # workspace は internal: true network 単独所属で、host から直接 TCP 到達できない。
+  # dev server (`pnpm dev` 等) をホストブラウザから見るため、Caddy reverse proxy を
+  # 別コンテナで挟み、Host header で workspace の各 port に振り分ける。
+  # 構成パターンは recipes/ingress-single-workspace/ から流用。
+  #
+  # HOST_PORT は 8080 固定 (本 recipe は単独起動前提のため可変化しない)。
+  # 並列起動対応は `integrated/multi-workspace/` で扱う。
+  ingress:
+    build:
+      context: ./ingress
+    image: single-workspace-ingress:dev
+    # internal: true 単独だとポート公開が効かないため、ingress を外部疎通を持つ
+    # `external` network にも join する (詳細は recipes/ingress-single-workspace/README.md)。
+    # 専用 network を分けず proxy 用の external を流用している。
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - internal
+      - external
+    depends_on:
+      - workspace
+
+  # ----- workspace (devcontainer 本体) -----
+
+  workspace:
+    build:
+      # build context = repo root。lib/mitm-proxy/bootstrap-ca.sh を Dockerfile から COPY するため。
+      # 既存パターン: recipes/cloud-mcp-with-short-lived-credential/compose.yaml も同方式。
+      context: ../..
+      dockerfile: integrated/single-workspace/Dockerfile
+    image: single-workspace-workspace:dev
+    command: sleep infinity
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:cached
+      # node_modules は bind mount から隔離して named volume に逃がす。
+      # bind mount (workspace の host 側) と node_modules (named volume) は別 filesystem になるため、
+      # 後述の pnpm store も別 named volume に分離して cross-fs fallback を回避する。
+      - workspace_node_modules:/workspace/node_modules
+      # pnpm の content-addressable store。bind mount に作られないように named volume に明示。
+      # 単なるキャッシュ (再生成可能) なので named volume で十分。
+      - workspace_pnpm_store:/pnpm-store
+      # Claude Code の config / 認証情報を host bind mount で永続化する。
+      # bind mount 先は host の ~/.config/devsbx/claude/ で、
+      # `docker compose down -v` でも消えない (初回 `claude login` の手間最小化)。
+      # host の ~/.claude/ 本体は持ち込まない (他プロジェクト履歴の隔離)。
+      # devcontainer extension は javascript-node image の `node` user を
+      # remoteUser として使うため home は /home/node/。
+      - ~/.config/devsbx/claude:/home/node/.claude
+    # workspace は internal network のみ。直接 egress 不可。
+    # 全 HTTPS は mitmproxy 経由で出る (read-only 許可 + hostname allowlist)。
+    environment:
+      HTTPS_PROXY: http://mitmproxy:8080
+      HTTP_PROXY: http://mitmproxy:8080
+      # internal の各 proxy service には mitmproxy を経由させない (mitmproxy は外向きの
+      # allowlist しか持たないため、internal hostname を流すと解決失敗する)。
+      # `.devsbx.internal` 規約で suffix 一括 bypass。新規 internal service を
+      # 追加する場合は compose 側で `<svc>.devsbx.internal` alias を付ければ NO_PROXY は触らずに済む。
+      NO_PROXY: localhost,127.0.0.1,.devsbx.internal
+      # store-dir を named volume 上の固定 path に明示的に設定。
+      # 明示しないと pnpm が cross-filesystem fallback で `./.pnpm-store/` に
+      # local store を作って bind mount 経由で repo を汚す。
+      npm_config_store_dir: /pnpm-store
+      # bind mount (workspace) と named volume (store) は別 filesystem のため
+      # hardlink できない。pnpm に copy 戦略を取らせる。
+      npm_config_package_import_method: copy
+      # Claude Code の config / state を 1 ヶ所に集約する。
+      # これを設定しないと ~/.claude.json が home 直下に作られ、bind mount の
+      # 外で永続化されない (毎回認証/状態が消える)。
+      # 参考: https://github.com/anthropics/claude-code/blob/main/.devcontainer/devcontainer.json
+      CLAUDE_CONFIG_DIR: /home/node/.claude
+    networks: [internal]
+    depends_on:
+      # bootstrap-ca.sh が mitm.it/cert/pem を取りに行くため、mitmproxy が
+      # healthy (CA cert 生成済み) になるまで workspace は起動できない。
+      mitmproxy:
+        condition: service_healthy
+      # git-gateway が起動していないと workspace の git 操作が失敗する。
+      git-gateway:
+        condition: service_healthy
+      mcp-github-proxy:
+        condition: service_started
+      mcp-atlassian-proxy:
+        condition: service_started
+      mcp-context7-proxy:
+        condition: service_started
+
+networks:
+  # workspace はここにしか居ない。internal: true で外向き egress を Docker ネットワーク設定で塞ぐ。
+  internal:
+    internal: true
+  # 各 proxy だけが居る側。github / api.anthropic.com / npm registry 等への egress。
+  # ingress (Caddy) もポート公開のためここに join している
+  # (internal: true 単独だと publish が効かない)。
+  external:
+
+volumes:
+  workspace_node_modules:
+  # pnpm の content-addressable store (cross-fs fallback で bind mount に漏れないように)。
+  workspace_pnpm_store:
+  # mitmproxy の CA 秘密鍵を永続化する named volume。
+  # 初回起動時に mitmproxy が自動生成し、以降は再利用される。
+  # workspace コンテナからは mount しないため CA 秘密鍵は workspace に届かない。
+  mitm-ca:

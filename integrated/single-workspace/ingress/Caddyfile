@@ -1,0 +1,25 @@
+{
+	auto_https off
+	admin off
+}
+
+# Host header で workspace の各 port に振り分ける。
+# 新しい mapping を追加する場合は handle ブロックを増やす。
+# Host matcher は port suffix を strip するため、ブラウザが送る
+# `Host: app.localhost:8080` も `app.localhost` も同じ matcher に当たる。
+:80 {
+	@app host app.localhost
+	handle @app {
+		reverse_proxy workspace:3000
+	}
+
+	@api host api.localhost
+	handle @api {
+		reverse_proxy workspace:4000
+	}
+
+	# 未登録の Host は明示的に 404。誤って全 host を workspace に流さない。
+	handle {
+		respond "no route for host: {host}" 404
+	}
+}

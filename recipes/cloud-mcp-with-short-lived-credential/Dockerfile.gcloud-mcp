@@ -1,0 +1,72 @@
+# gcloud-mcp + mcp-proxy の単一 image。
+#
+# 構成:
+#   - gcr.io/.../google-cloud-cli:<VERSION>-slim をベースに、公式 node image から
+#     Node + corepack を multi-stage COPY、pnpm を corepack で activate して
+#     mcp-proxy と gcloud-mcp の依存を install
+#   - mcp-proxy は /app 配下、gcloud-mcp は /opt/gcp-mcp 配下に置く
+#   - WORKDIR は /app (mcp-proxy が main process)
+#   - backend は compose 側で `pnpm --dir /opt/gcp-mcp exec gcloud-mcp` で起動
+#
+# build context は **リポジトリ root** を期待する（compose.yaml で context: ../..）。
+# lib/mcp-proxy/ ソースと recipes/cloud-mcp-with-short-lived-credential/pnpm-workspace.yaml
+# の両方を参照するため。
+
+# Node は公式 image (nodejs.org の tarball を配布する node Docker 公式) から
+# /usr/local 配下を COPY する。
+# digest はリポジトリ全体で `lib/mcp-proxy/Dockerfile` 等と揃える。
+# 更新は host で
+#   docker buildx imagetools inspect node:22-slim
+# の "Digest:" を引いて置換する。
+FROM node:22-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732 AS node
+
+# base image は GCP 公式が Artifact Registry で配布する google-cloud-cli を使う。
+# :stable / :alpine / :slim / :emulators が multi-arch (amd64 + arm64) で提供される。
+#
+# version pin: pnpm の minimumReleaseAge=10080 (7 日) と方針を揃えるため、
+# floating :slim ではなく :<VERSION>-slim を採り、release から 7 日以上経過した
+# version のみ採用する。更新は host で
+#   docker buildx imagetools inspect gcr.io/google.com/cloudsdktool/google-cloud-cli:<VERSION>-slim
+# の "Digest:" (manifest index 段) を引いて置換する。
+FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:570.0.0-slim@sha256:f32aac7cd13c0bc689daa90a1da5fe130dfebc127600b444178bc2ea600b1987
+
+# Node + corepack を公式 image から取り込む。
+# pnpm version は packageManager フィールドに固定されたものを corepack が
+# 初回 `pnpm` 起動時に解決する。
+#
+# node:22-slim には node 本体のほかに npm shim (相対 symlink → ../lib/node_modules/npm)
+# と yarn shim (絶対 symlink → /opt/yarn-v1.22.22/) が同梱されているが、本 image では
+# pnpm 経由しか使わないので node 本体と corepack だけを抜き出す。
+# 単一ファイル COPY だと symlink が dereference されるため、corepack の shim は
+# COPY 後に明示的に張り直す (相対 symlink を保つことで `node` の module 解決が
+# corepack 本体の dist/lib/corepack.cjs まで届くようにする)。
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/corepack /usr/local/lib/node_modules/corepack
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && corepack enable pnpm
+
+# ----- mcp-proxy のソース + 依存 -----
+WORKDIR /app
+COPY lib/mcp-proxy/package.json lib/mcp-proxy/pnpm-lock.yaml lib/mcp-proxy/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY lib/mcp-proxy/tsconfig.json ./
+COPY lib/mcp-proxy/src ./src
+
+# ----- gcloud-mcp: pin 済み依存を build-time install -----
+WORKDIR /opt/gcp-mcp
+COPY recipes/cloud-mcp-with-short-lived-credential/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY recipes/cloud-mcp-with-short-lived-credential/package.json recipes/cloud-mcp-with-short-lived-credential/pnpm-lock.yaml ./
+
+# build-time に install して runtime はネット不要にする。
+# --frozen-lockfile で lockfile と package.json の不整合があれば build を失敗させる
+# （AI agent が version を勝手にずらすのを防ぐ）。
+RUN pnpm install --frozen-lockfile
+
+# gcloud CLI が AI 用途で意味のないコマンドや interactive セッションを開始しないよう、
+# gcloud-mcp 側で既定で deny されている。本 image では追加の gcloud config はしない
+# （recipe ごとに impersonation の設定方法が異なるため、各 compose.yaml で env / volume で渡す）。
+
+# mcp-proxy が main process。compose 側で backend (gcloud-mcp) の起動コマンドを `--` の後に渡す。
+WORKDIR /app
+EXPOSE 8000
+ENTRYPOINT ["node", "src/index.ts"]

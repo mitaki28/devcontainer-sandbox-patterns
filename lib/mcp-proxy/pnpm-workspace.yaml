@@ -1,0 +1,21 @@
+# pnpm サプライチェーン攻撃の緩和設定。
+# pnpm 11+ では .npmrc が auth / registry 専用になり、pnpm 固有の設定は
+# pnpm-workspace.yaml に置く形に集約された (pnpm 10.x でも有効)。
+# .npmrc に書いた場合、shared-workspace-lockfile=false の組み合わせ等で
+# minimumReleaseAge が無言で無効化されるバグ (pnpm #10008) があるため、
+# サプライチェーン対策は pnpm-workspace.yaml に集約する。
+#
+# 背景: mcp-proxy は信頼境界を担う proxy 本体で、悪意のあるバージョンが
+# pull されると session 経由で扱う bearer token / OAuth refresh token を
+# 抜かれるリスクがある。
+#
+# 参考: https://pnpm.io/supply-chain-security
+#       https://github.com/pnpm/pnpm/issues/10008
+
+# 公開から 7 日 (10080 分) 経過していない version は install しない。
+# 緊急のセキュリティパッチが必要な場合は minimumReleaseAgeExclude で個別に opt-out する。
+minimumReleaseAge: 10080
+
+# git: / file: 等の exotic specifier を transitive deps が使うのを禁止
+# (registry を経由しない経路を塞ぐ)。pnpm 11 ではデフォルト true。
+blockExoticSubdeps: true
