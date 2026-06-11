@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 // proxy の動作確認用の最小 MCP server。
 // stdio で起動し、`echo` ツールを 1 つだけ提供する。
 

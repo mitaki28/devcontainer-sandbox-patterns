@@ -92,6 +92,8 @@ services:
       HTTP_PROXY: http://mitmproxy:8080
       HTTPS_PROXY: http://mitmproxy:8080
       NO_PROXY: localhost,127.0.0.1
+      # fetch が HTTPS_PROXY env を見て proxy 経由になるように。
+      NODE_USE_ENV_PROXY: "1"
     networks:
       - internal-net
     depends_on:
@@ -99,7 +101,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app/test:ro
-    command: ["bun", "test", "test/smoke.test.ts", "--timeout", "30000"]
+    command: ["node", "--test", "--test-timeout=30000", "test/smoke.test.ts"]
 
 networks:
   # smoke ↔ mitmproxy 用。production と同じく internal: true で gateway 無し。

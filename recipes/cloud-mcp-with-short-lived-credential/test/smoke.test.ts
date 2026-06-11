@@ -5,12 +5,13 @@
 // 事前に host 側で `./refresh-token.sh` を 1 回実行して
 // ${HOME}/.cache/devsbx/gcp-mcp/token を作っておく必要がある（README 参照）。
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { after, before, describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const url = Bun.env["PROXY_URL"] ?? "http://proxy:8000/mcp";
-const token = Bun.env["PROXY_TOKEN"];
+const url = process.env["PROXY_URL"] ?? "http://proxy:8000/mcp";
+const token = process.env["PROXY_TOKEN"];
 
 async function connectClient(): Promise<Client> {
   let lastErr: unknown;
@@ -25,7 +26,7 @@ async function connectClient(): Promise<Client> {
       return c;
     } catch (e) {
       lastErr = e;
-      await Bun.sleep(500);
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -51,35 +52,35 @@ async function callGcloud(client: Client, args: string[]) {
 describe("recipes/cloud-mcp-with-short-lived-credential smoke (host script → proxy → gcloud-mcp)", () => {
   let client: Client;
 
-  beforeAll(async () => {
+  before(async () => {
     client = await connectClient();
-  }, 60_000);
+  }, { timeout: 60_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await client.close();
   });
 
   test("server identifies as gcloud-mcp", () => {
     const info = client.getServerVersion();
-    expect(info?.name).toMatch(/gcloud/i);
+    assert.match(info?.name ?? "", /gcloud/i);
   });
 
   test("tools/list returns non-empty gcloud tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools.length).toBeGreaterThan(0);
+    assert.ok(tools.length > 0);
     const names = tools.map((t) => t.name).join(",");
-    expect(names).toMatch(/gcloud|run_gcloud|gcp/i);
+    assert.match(names, /gcloud|run_gcloud|gcp/i);
   });
 
-  test("CLOUDSDK_AUTH_ACCESS_TOKEN_FILE is wired through to gcloud config", async () => {
+  test("CLOUDSDK_AUTH_ACCESS_TOKEN_FILE is wired through to gcloud config", { timeout: 30_000 }, async () => {
     const result = await callGcloud(client, ["config", "get", "auth/access_token_file"]);
-    expect(result.isError).toBeFalsy();
+    assert.ok(!result.isError);
     const text = extractText(result.content);
     // 値が空 / "(unset)" だと token 注入経路が壊れている。
-    expect(text).toContain("/tokens/token");
-  }, 30_000);
+    assert.ok(text.includes("/tokens/token"));
+  });
 
-  test("can list artifact registry repositories via gcloud (auth chain works)", async () => {
+  test("can list artifact registry repositories via gcloud (auth chain works)", { timeout: 30_000 }, async () => {
     // sandbox SA に roles/artifactregistry.reader が付いている前提（README 参照）。
     // refresh-token.sh が出した SA token を proxy が file 経由で読み、
     // GCP に Bearer 認証として届けて受理されることを確認する。
@@ -90,6 +91,6 @@ describe("recipes/cloud-mcp-with-short-lived-credential smoke (host script → p
       "list",
       "--format=value(name)",
     ]);
-    expect(result.isError).toBeFalsy();
-  }, 30_000);
+    assert.ok(!result.isError);
+  });
 });

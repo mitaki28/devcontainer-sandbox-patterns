@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { after, before, describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startHttpServer } from "../src/index.ts";
@@ -6,13 +7,26 @@ import { startHttpServer } from "../src/index.ts";
 let server: ReturnType<typeof startHttpServer>;
 let baseUrl: string;
 
-beforeAll(() => {
+before(async () => {
   server = startHttpServer({ hostname: "127.0.0.1", port: 0 });
-  baseUrl = `http://${server.hostname}:${server.port}/mcp`;
+  await new Promise<void>((resolve) => {
+    server.once("listening", () => {
+      resolve();
+    });
+  });
+  const addr = server.address();
+  const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+  baseUrl = `http://127.0.0.1:${port}/mcp`;
 });
 
-afterAll(() => {
-  server.stop(true);
+after(async () => {
+  await new Promise<void>((resolve, reject) => {
+    server.closeAllConnections();
+    server.close((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
 });
 
 describe("fetch-mcp MCP server", () => {
@@ -21,9 +35,9 @@ describe("fetch-mcp MCP server", () => {
     await client.connect(new StreamableHTTPClientTransport(new URL(baseUrl)));
     try {
       const { tools } = await client.listTools();
-      expect(tools.length).toBe(1);
-      expect(tools[0]?.name).toBe("fetch");
-      expect(tools[0]?.outputSchema).toBeDefined();
+      assert.equal(tools.length, 1);
+      assert.equal(tools[0]?.name, "fetch");
+      assert.notEqual(tools[0]?.outputSchema, undefined);
     } finally {
       await client.close();
     }
@@ -38,11 +52,11 @@ describe("fetch-mcp MCP server", () => {
         name: "fetch",
         arguments: { url: "http://example.com/" },
       });
-      expect(r.isError).toBe(true);
+      assert.equal(r.isError, true);
       const content = r.content as Array<{ type: string; text?: string }>;
-      expect(content[0]?.type).toBe("text");
-      expect(content[0]?.text).toContain("filter: blocked");
-      expect(content[0]?.text).toContain("https");
+      assert.equal(content[0]?.type, "text");
+      assert.ok(content[0]?.text?.includes("filter: blocked"));
+      assert.ok(content[0]?.text?.includes("https"));
     } finally {
       await client.close();
     }
@@ -58,9 +72,9 @@ describe("fetch-mcp MCP server", () => {
         name: "fetch",
         arguments: { url: "https://nonexistent.invalid.example/" },
       });
-      expect(r.isError).toBe(true);
+      assert.equal(r.isError, true);
       const content = r.content as Array<{ type: string; text?: string }>;
-      expect(content[0]?.text).toContain("network");
+      assert.ok(content[0]?.text?.includes("network"));
     } finally {
       await client.close();
     }

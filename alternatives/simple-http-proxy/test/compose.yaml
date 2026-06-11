@@ -32,7 +32,7 @@ services:
           - mock-target.test
 
   smoke:
-    image: oven/bun:1@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e
+    image: node:22-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732
     working_dir: /app
     volumes:
       - .:/app/test:ro
@@ -42,12 +42,14 @@ services:
       HTTPS_PROXY: http://proxy:3128
       NO_PROXY: ""
       NODE_EXTRA_CA_CERTS: /certs/mock-target.crt
+      # fetch が HTTPS_PROXY env を見て proxy 経由になるように。
+      NODE_USE_ENV_PROXY: "1"
     entrypoint:
       - sh
       - -c
       - |
         while [ ! -f /certs/.ready ]; do sleep 0.1; done
-        exec bun test test/network-smoke.test.ts
+        exec node --test test/network-smoke.test.ts
     networks:
       - internal-net
     depends_on:

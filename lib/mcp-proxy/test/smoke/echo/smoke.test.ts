@@ -2,12 +2,13 @@
 // PROXY_URL / PROXY_TOKEN を介して mcp-proxy に接続し、echo backend が
 // initialize / tools/list / tools/call を透過 forward できることを確認する。
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { after, before, describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const url = Bun.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
-const token = Bun.env["PROXY_TOKEN"];
+const url = process.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
+const token = process.env["PROXY_TOKEN"];
 
 async function connectClient(): Promise<Client> {
   let lastErr: unknown;
@@ -21,7 +22,7 @@ async function connectClient(): Promise<Client> {
       return c;
     } catch (e) {
       lastErr = e;
-      await Bun.sleep(500);
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -30,35 +31,35 @@ async function connectClient(): Promise<Client> {
 describe("mcp-proxy smoke", () => {
   let client: Client;
 
-  beforeAll(async () => {
+  before(async () => {
     client = await connectClient();
-  }, 30_000);
+  }, { timeout: 30_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await client.close();
   });
 
   test("rejects requests without bearer token", async () => {
     if (!token) return; // token 無効化時はスキップ
     const res = await fetch(url, { method: "POST" });
-    expect(res.status).toBe(401);
+    assert.equal(res.status, 401);
   });
 
   test("rejects /unknown path", async () => {
     const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
     const res = await fetch(url.replace(/\/mcp$/, "/foo"), { headers });
-    expect(res.status).toBe(404);
+    assert.equal(res.status, 404);
   });
 
   test("tools/list returns echo tool", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toContain("echo");
+    assert.ok(tools.map((t) => t.name).includes("echo"));
   });
 
   test("tools/call echoes the input", async () => {
     const res = await client.callTool({ name: "echo", arguments: { msg: "hello world" } });
     const content = res.content as Array<{ type: string; text?: string }>;
-    expect(content[0]?.text).toBe("echo: hello world");
+    assert.equal(content[0]?.text, "echo: hello world");
   });
 
   // 2 つの Client が同時に接続すると、それぞれが別の session を確立して別 backend
@@ -74,8 +75,8 @@ describe("mcp-proxy smoke", () => {
       ]);
       const textA = (resA.content as Array<{ text?: string }>)[0]?.text;
       const textB = (resB.content as Array<{ text?: string }>)[0]?.text;
-      expect(textA).toBe("echo: A");
-      expect(textB).toBe("echo: B");
+      assert.equal(textA, "echo: A");
+      assert.equal(textB, "echo: B");
     } finally {
       await a.close();
       await b.close();

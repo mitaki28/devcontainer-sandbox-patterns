@@ -1,4 +1,0 @@
-[install]
-# サプライチェーン攻撃対策: 公開から 7 日経過したバージョンのみインストール対象とする。
-# 例外を設けたいパッケージが出てきたら minimumReleaseAgeExcludes に追加する。
-minimumReleaseAge = 604800

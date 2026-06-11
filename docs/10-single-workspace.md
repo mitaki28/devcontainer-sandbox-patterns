@@ -50,9 +50,9 @@
 |---|---|---|---|
 | MCP API (`api.githubcopilot.com` 経由) | mcp-github-proxy | MCP ツール名 (`--deny-tool 'delete_*' 'merge_*' 'push_*'` 等) | PAT スコープが GitHub 側で許す操作範囲に絞られている |
 | git transport (`https://github.com/<owner>/<repo>.git`) | git-gateway | `ALLOWED_REPOS` (リポジトリ単位) / `ALLOWED_REF_PATTERNS` (ref / ブランチ単位) / コミット内容 | PAT スコープが GitHub 側で許す書き込み範囲に絞られている |
-| `github.com` への HTTP 直叩き | mitm policy + 作業コンテナの gitconfig | `readonly_hosts` から `github.com` を外して原則拒否 + gitconfig の `insteadOf` で git-gateway に書き換え | (経路自体を成立させない構造) |
+| `github.com` への HTTP 直叩き | mitm policy | `readonly_hosts` から `github.com` を外して原則拒否 (経路自体を成立させない構造) | 作業コンテナの gitconfig (`insteadOf`) が git transport を git-gateway へ誘導 (作業コンテナから書き換え可能なため境界には数えない) |
 
-この構造により、「`github.com` というホストを許可した瞬間にすべての操作が許される」という粗い ACL に陥らず、操作の種類 (MCP ツール / git push / HTTP 直叩き) ごとに別の境界が別の粒度で制御できる。加えて、git transport では git-gateway の ACL の下流で PAT スコープが GitHub 側制限として効き、HTTP 直叩きは mitm policy で経路自体を成立させないことに加え gitconfig の書き換えで git-gateway 側に流すというように、同一経路上では多層的に塞ぐ形になっている。
+この構造により、「`github.com` というホストを許可した瞬間にすべての操作が許される」という粗い ACL に陥らず、操作の種類 (MCP ツール / git push / HTTP 直叩き) ごとに別の境界が別の粒度で制御できる。加えて、git transport では git-gateway の ACL の下流で PAT スコープが GitHub 側制限として効く。HTTP 直叩きを塞ぐ境界は mitm policy の原則拒否であり、作業コンテナの gitconfig (`insteadOf`) は git transport を git-gateway へ誘導する利便のための設定にすぎない (作業コンテナから書き換え可能なため、評価軸「ACL はプロキシ側で評価する」の意味での境界には数えない)。
 
 ## 5. 実行時の外向き通信と `pnpm install` の扱い
 
@@ -64,17 +64,17 @@
 
 `alternatives/dependencies-build-time/` (付録 [alt-dependencies-build-time](./appendix/alt-dependencies-build-time.md)) は「実行時の外向き通信を経路ごと断つ」ためにビルド時インストールで焼き込むパターンで、強い隔離になる一方で依存追加がビルドを要する DX 上のコストが大きい。本統合構成では mitm の読み取りのみ許可を境界とすることで、**実行時にインストールを許しつつ publish 系はポリシーで塞ぐ** バランスに着地している。
 
-実行時の外向き通信を経路ごと断ちたい脅威モデル向けには付録のビルド時インストールパターンが利用できる。
+実行時の外向き通信を経路ごと断ちたい場合は付録のビルド時インストールパターンが利用できる。
 
 ## 6. 評価軸との対応
 
-[02-design.md](./02-design.md) §4 の 4 評価軸 + cloud (§6) で導入した「プロキシ内の認証情報の短寿命化」軸を、統合構成がどう満たすか:
+[02-design.md](./02-design.md) §4 の 4 評価軸 + cloud の章 ([06-cloud-mcp.md](./06-cloud-mcp.md) §3.2) で導入した「プロキシ内に長寿命の認証情報を置かない」軸を、統合構成がどう満たすか:
 
 | 評価軸 | このレシピがどう満たすか |
 |---|---|
 | 秘匿情報は作業コンテナ外に置く | API トークン / OAuth リフレッシュトークン / CA 秘密鍵はすべてホスト側 (`env_file` / バインドマウント / 名前付きボリュームのいずれか) に閉じ、プロキシ群だけが読み込む。作業コンテナ側のファイルシステムにも環境変数にも入らない |
-| 作業コンテナはプロキシのみと通信する | 作業コンテナは internal ネットワーク 1 つに閉じ、5 つのプロキシ経由でしか外に出られない |
-| ACL はプロキシ側で評価する | 操作粒度 (MCP ツール名) / HTTP 層 (ホスト × HTTP メソッド × パス) / Git transport (ref / commit) の 3 つすべてプロキシ側で評価 |
+| 作業コンテナはプロキシのみと通信する | 作業コンテナは internal ネットワーク 1 つに閉じ、6 つのプロキシ経由でしか外に出られない |
+| ACL はプロキシ側で評価する | 操作粒度 (MCP ツール名) / HTTP 層 (ホスト × HTTP メソッド × パス) / Git transport (リポジトリ / ref / commit) の 3 つすべてプロキシ側で評価 |
 | 境界ドメインは信頼できる先に限定する | mitm-proxy のポリシーで trusted / readonly_hosts に明示列挙、git-gateway も `UPSTREAM_BASE_URL=https://github.com/` 固定 |
 | (cloud で追加) プロキシ内に長寿命の認証情報を置かない | `mcp-gcloud-proxy` はホスト側で発行された 1h 寿命の SA アクセストークンを ro mount で読むだけ。リフレッシュトークン / 個人 ADC はプロキシにも作業コンテナにも届かない |
 

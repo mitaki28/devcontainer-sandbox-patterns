@@ -1,10 +1,11 @@
-#!/usr/bin/env bun
 import { timingSafeEqual } from "node:crypto";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage, RequestId } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -202,7 +203,7 @@ function parseNonNegativeInt(value: string, label: string): number {
 
 function parseCli(): CliArgs {
   const { values, positionals } = parseArgs({
-    args: Bun.argv.slice(2),
+    args: process.argv.slice(2),
     options: {
       listen: { type: "string" },
       token: { type: "string" },
@@ -257,21 +258,21 @@ function parseCli(): CliArgs {
   // loopback の外で受ける構成では recipe 側で 0.0.0.0:3030 を明示する。
   // `--callback-url` の host:port とは独立に扱う。`--listen` と同形式にして host 指定漏れを防ぐ。
   const callbackListenRaw =
-    values["callback-listen"] ?? Bun.env["PROXY_CALLBACK_LISTEN"] ?? "127.0.0.1:3030";
+    values["callback-listen"] ?? process.env["PROXY_CALLBACK_LISTEN"] ?? "127.0.0.1:3030";
   const callbackListen = parseListen(callbackListenRaw, "--callback-listen");
 
   const callbackTimeoutRaw =
-    values["callback-timeout"] ?? Bun.env["PROXY_CALLBACK_TIMEOUT"] ?? "300000";
+    values["callback-timeout"] ?? process.env["PROXY_CALLBACK_TIMEOUT"] ?? "300000";
   const callbackTimeoutMs = parsePositiveInt(callbackTimeoutRaw, "--callback-timeout");
 
   const sessionIdleTimeoutRaw =
-    values["session-idle-timeout"] ?? Bun.env["PROXY_SESSION_IDLE_TIMEOUT"] ?? "3600000";
+    values["session-idle-timeout"] ?? process.env["PROXY_SESSION_IDLE_TIMEOUT"] ?? "3600000";
   const sessionIdleTimeoutMs = parseNonNegativeInt(
     sessionIdleTimeoutRaw,
     "--session-idle-timeout",
   );
 
-  const callbackUrlRaw = values["callback-url"] ?? Bun.env["PROXY_CALLBACK_URL"];
+  const callbackUrlRaw = values["callback-url"] ?? process.env["PROXY_CALLBACK_URL"];
   let callbackUrl: URL;
   if (callbackUrlRaw) {
     try {
@@ -289,23 +290,23 @@ function parseCli(): CliArgs {
     );
   }
 
-  const oauth = values.oauth ?? Bun.env["PROXY_OAUTH"] === "1";
+  const oauth = values.oauth ?? process.env["PROXY_OAUTH"] === "1";
   if (oauth && transportRaw !== "http") {
     throw new Error("--oauth requires --transport http");
   }
 
   const oauthRefreshDedup =
-    values["oauth-refresh-dedup"] ?? Bun.env["PROXY_OAUTH_REFRESH_DEDUP"] === "1";
+    values["oauth-refresh-dedup"] ?? process.env["PROXY_OAUTH_REFRESH_DEDUP"] === "1";
   if (oauthRefreshDedup && !oauth) {
     throw new Error("--oauth-refresh-dedup requires --oauth");
   }
 
   const filter: FilterOptions = {
-    allow: [...(values["allow-tool"] ?? []), ...parsePatternList(Bun.env["PROXY_ALLOW_TOOLS"])],
-    deny: [...(values["deny-tool"] ?? []), ...parsePatternList(Bun.env["PROXY_DENY_TOOLS"])],
+    allow: [...(values["allow-tool"] ?? []), ...parsePatternList(process.env["PROXY_ALLOW_TOOLS"])],
+    deny: [...(values["deny-tool"] ?? []), ...parsePatternList(process.env["PROXY_DENY_TOOLS"])],
   };
 
-  const token = values.token ?? Bun.env["PROXY_TOKEN"];
+  const token = values.token ?? process.env["PROXY_TOKEN"];
   if (!token) {
     throw new Error(
       "Bearer token is required: pass --token <token> or set PROXY_TOKEN. " +
@@ -314,7 +315,7 @@ function parseCli(): CliArgs {
   }
 
   return {
-    listen: values.listen ?? Bun.env["PROXY_LISTEN"] ?? "0.0.0.0:8000",
+    listen: values.listen ?? process.env["PROXY_LISTEN"] ?? "0.0.0.0:8000",
     token,
     transport: transportRaw,
     oauth,
@@ -326,8 +327,8 @@ function parseCli(): CliArgs {
     callbackTimeoutMs,
     sessionIdleTimeoutMs,
     oauthRefreshDedup,
-    tokenStore: values["token-store"] ?? Bun.env["PROXY_TOKEN_STORE"] ?? "/data",
-    scope: values.scope ?? Bun.env["PROXY_OAUTH_SCOPE"],
+    tokenStore: values["token-store"] ?? process.env["PROXY_TOKEN_STORE"] ?? "/data",
+    scope: values.scope ?? process.env["PROXY_OAUTH_SCOPE"],
     filter,
     name,
     commandOrUrl,
@@ -368,13 +369,13 @@ interface AwaitOAuthCallbackOptions {
    */
   callbackUrl: URL;
   /**
-   * Bun.serve の `hostname` に渡す bind 範囲。default は CLI 側で `127.0.0.1`、
+   * `server.listen` の host 引数。default は CLI 側で `127.0.0.1`、
    * reverse proxy 前段の構成等で loopback の外に開く必要があるときだけ `0.0.0.0`
    * 等に拡げる前提。required にして caller (CLI parser / test harness) が
    * 明示する形にしている。
    */
   listenHost: string;
-  /** Bun.serve に渡す port。`0` を渡すと OS が動的に割り当てる (test 用)。 */
+  /** `server.listen` に渡す port。`0` を渡すと OS が動的に割り当てる (test 用)。 */
   listenPort: number;
   /** 受信した state を保存済み nonce と timing-safe で照合する関数。 */
   verifyState: (received: string) => boolean;
@@ -406,72 +407,84 @@ export function awaitOAuthCallback(
     const { name, callbackUrl, listenHost, listenPort, verifyState, timeoutMs } = opts;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    // Bun.serve は同期で server を返すが、fetch handler / timer の closure から
-    // 参照するため non-null assertion 用に変数を let で先に宣言する。
-    let server!: ReturnType<typeof Bun.serve>;
+
+    const expectedPath = CALLBACK_PATH;
+
+    const server = createServer((req, res) => {
+      // base は固定値にする。`req.headers.host` を base に使うと不正な Host ヘッダ
+      // (スペース入り等) で `new URL` が throw し、同期ハンドラ内の例外として
+      // プロセスごと落ちる。pathname / searchParams しか使わないので host は不要。
+      const u = new URL(req.url ?? "/", "http://localhost");
+      if (u.pathname !== expectedPath) {
+        res.writeHead(404).end("Not Found");
+        return;
+      }
+      const state = u.searchParams.get("state");
+      if (state === null || !verifyState(state)) {
+        // state 不一致 / 不在: 静かに 400 を返して listener は継続する。
+        // 攻撃者の偽 code/error/state injection で Promise を settle させない。
+        console.error(`[${name}] callback state mismatch; ignoring request`);
+        res.writeHead(400).end("State mismatch");
+        return;
+      }
+      const error = u.searchParams.get("error");
+      if (error) {
+        const desc = u.searchParams.get("error_description");
+        finish(() => reject(new Error(`OAuth error: ${error}${desc ? ` (${desc})` : ""}`)));
+        res
+          .writeHead(400, {
+            "Content-Type": "text/html; charset=utf-8",
+            Connection: "close",
+          })
+          .end(htmlPage("OAuth error", error + (desc ? ` (${desc})` : "")));
+        return;
+      }
+      const code = u.searchParams.get("code");
+      if (!code) {
+        res.writeHead(400).end("Missing code");
+        return;
+      }
+      finish(() => resolve(code));
+      res
+        .writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          Connection: "close",
+        })
+        .end(
+          htmlPage(
+            "Authorization complete",
+            "mcp-proxy received the authorization code. You can close this tab.",
+          ),
+        );
+    });
 
     const finish = (action: () => void): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      // response が届くだけの遅延を取って stop する（force すると socket が即 close される）。
-      setTimeout(() => void server.stop(), 200);
+      // response 送信完了の遅延を取ってから close する。force すると socket が
+      // 即 close されてブラウザに ERR_EMPTY_RESPONSE が出る。keep-alive 接続は
+      // closeAllConnections() で強制クリーンアップしないと shutdown が滞留する。
+      setTimeout(() => {
+        server.close();
+        server.closeAllConnections();
+      }, 200);
       action();
     };
 
-    const expectedPath = CALLBACK_PATH;
-
-    server = Bun.serve({
-      hostname: listenHost,
-      port: listenPort,
-      fetch(req) {
-        const u = new URL(req.url);
-        if (u.pathname !== expectedPath) {
-          return new Response("Not Found", { status: 404 });
-        }
-        const state = u.searchParams.get("state");
-        if (state === null || !verifyState(state)) {
-          // state 不一致 / 不在: 静かに 400 を返して listener は継続する。
-          // 攻撃者の偽 code/error/state injection で Promise を settle させない。
-          console.error(`[${name}] callback state mismatch; ignoring request`);
-          return new Response("State mismatch", { status: 400 });
-        }
-        const error = u.searchParams.get("error");
-        if (error) {
-          const desc = u.searchParams.get("error_description");
-          finish(() => reject(new Error(`OAuth error: ${error}${desc ? ` (${desc})` : ""}`)));
-          return new Response(htmlPage("OAuth error", error + (desc ? ` (${desc})` : "")), {
-            status: 400,
-            headers: { "Content-Type": "text/html; charset=utf-8", Connection: "close" },
-          });
-        }
-        const code = u.searchParams.get("code");
-        if (!code) {
-          return new Response("Missing code", { status: 400 });
-        }
-        finish(() => resolve(code));
-        return new Response(
-          htmlPage(
-            "Authorization complete",
-            "mcp-proxy received the authorization code. You can close this tab.",
-          ),
-          { headers: { "Content-Type": "text/html; charset=utf-8", Connection: "close" } },
-        );
-      },
+    server.listen(listenPort, listenHost, () => {
+      const addr = server.address();
+      const actualPort = typeof addr === "object" && addr !== null ? addr.port : listenPort;
+      opts.onListen?.(actualPort);
+      console.error(
+        `[${name}] callback listening on ${listenHost}:${String(actualPort)}${expectedPath}` +
+          ` (redirect_uri = ${callbackUrl.toString()}, timeout = ${String(timeoutMs)}ms)`,
+      );
     });
-
-    // unix socket モードは使わないので server.port は常に number。型上は number | undefined。
-    const actualPort = server.port ?? listenPort;
-    opts.onListen?.(actualPort);
 
     timer = setTimeout(() => {
       finish(() => reject(new CallbackTimeoutError(timeoutMs)));
     }, timeoutMs);
-
-    console.error(
-      `[${name}] callback listening on ${listenHost}:${String(actualPort)}${expectedPath}` +
-        ` (redirect_uri = ${callbackUrl.toString()}, timeout = ${String(timeoutMs)}ms)`,
-    );
   });
 }
 
@@ -533,16 +546,23 @@ export function buildBackendEnv(
  * fetch 中の `body` が OAuth 2.1 spec の refresh_token grant か判定する。
  * SDK の `executeTokenRequest` は `URLSearchParams` をそのまま body に渡してくる
  * (`auth.js: body: tokenRequestParams`)。SDK 側が string serialize に切り替わった
- * 場合の保険として string body も受け付ける。OAuth 2.1 で token endpoint への
- * request は `application/x-www-form-urlencoded` 固定なので、それ以外の body 型を
- * 見たら refresh ではないと判定して素通す。
+ * 場合の保険として string body も受け付ける。
+ *
+ * この fetch wrapper は backend への全 HTTP request を通るため、MCP 本体の JSON request
+ * も string body として渡ってくる。`new URLSearchParams(jsonString)` は JSON 文字列でも
+ * 例外を投げずに解釈してしまい、`tools/call` の引数値に `&grant_type=refresh_token&` を
+ * 仕込まれると誤って refresh と判定されうる。OAuth 2.1 で token endpoint への request は
+ * `application/x-www-form-urlencoded` 固定なので、Content-Type が一致する request だけを
+ * 対象にして JSON request を除外する。
  */
-function isRefreshTokenRequest(init: RequestInit | undefined): boolean {
+export function isRefreshTokenRequest(init: RequestInit | undefined): boolean {
   const body = init?.body;
   if (body instanceof URLSearchParams) {
+    // URLSearchParams body は fetch が自動で form-urlencoded の Content-Type を付ける。
     return body.get("grant_type") === "refresh_token";
   }
   if (typeof body === "string") {
+    if (!isFormUrlEncoded(init?.headers)) return false;
     try {
       return new URLSearchParams(body).get("grant_type") === "refresh_token";
     } catch {
@@ -550,6 +570,33 @@ function isRefreshTokenRequest(init: RequestInit | undefined): boolean {
     }
   }
   return false;
+}
+
+type HeadersValue = NonNullable<RequestInit["headers"]>;
+
+/** `Content-Type` が `application/x-www-form-urlencoded` か (大文字小文字・charset 付き許容)。 */
+function isFormUrlEncoded(headers: RequestInit["headers"]): boolean {
+  if (!headers) return false;
+  const contentType = getHeader(headers, "content-type");
+  return contentType !== undefined && /application\/x-www-form-urlencoded/i.test(contentType);
+}
+
+/** `RequestInit["headers"]` の 3 形態 (Headers / 配列 / レコード) から指定ヘッダを大文字小文字無視で引く。 */
+function getHeader(headers: HeadersValue, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    return headers.get(name) ?? undefined;
+  }
+  if (Array.isArray(headers)) {
+    for (const [k, v] of headers) {
+      if (k.toLowerCase() === lower) return String(v);
+    }
+    return undefined;
+  }
+  for (const [k, v] of Object.entries(headers as Record<string, string>)) {
+    if (k.toLowerCase() === lower) return v;
+  }
+  return undefined;
 }
 
 /**
@@ -569,7 +616,7 @@ function isRefreshTokenRequest(init: RequestInit | undefined): boolean {
  * して独立に read できるようにする。
  */
 function createOAuthRefreshDedupFetch(): FetchLike {
-  // Bun の global Response (BunHeadersOverride 拡張) と SDK の FetchLike が要求する
+  // global fetch が返す Response (@types/node 由来) と SDK の FetchLike が要求する
   // undici-types Response は同じ Web Standard Response の別宣言で TS 上は不整合だが、
   // runtime では完全互換 (clone() / json() 等は素通しで動く)。inflight は Promise<unknown> で
   // 抱え、関数全体を最後に as unknown as FetchLike でブリッジして型衝突を吸収する。
@@ -711,7 +758,7 @@ function isCredentialError(e: unknown): boolean {
 interface SessionState {
   /** SDK が発行した session id。closeSession 等で逆引きできるよう state にも保持する。 */
   id: string;
-  front: WebStandardStreamableHTTPServerTransport;
+  front: StreamableHTTPServerTransport;
   backend: Transport;
   /**
    * client が出した request の id → method 名。tools/list 応答にだけ filter を
@@ -953,79 +1000,91 @@ async function main(): Promise<void> {
 
   const expectedAuth = `Bearer ${args.token}`;
 
-  Bun.serve({
-    hostname,
-    port,
-    async fetch(req) {
-      if (!timingSafeStringEqual(req.headers.get("authorization"), expectedAuth)) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-      const url = new URL(req.url);
-      if (url.pathname !== "/mcp") {
-        return new Response("Not Found", { status: 404 });
-      }
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    if (!timingSafeStringEqual(req.headers.authorization ?? null, expectedAuth)) {
+      res.writeHead(401).end("Unauthorized");
+      return;
+    }
+    // base は固定値にする (上の callback listener と同じ理由で Host ヘッダ非依存にする)。
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (url.pathname !== "/mcp") {
+      res.writeHead(404).end("Not Found");
+      return;
+    }
 
-      const sessionId = req.headers.get("mcp-session-id");
-      const existing = sessionId ? sessions.get(sessionId) : undefined;
-      if (existing) {
-        // HTTP request が届いた時点で activity を更新する。GET (standalone SSE を開く) は
-        // onmessage を経由しないため、ここでもタッチしておかないと standalone SSE 接続中の
-        // session が idle 判定されてしまう。
-        existing.lastActivityAt = Date.now();
-        return existing.front.handleRequest(req);
-      }
+    const sessionIdHeader = req.headers["mcp-session-id"];
+    const sessionId =
+      typeof sessionIdHeader === "string" ? sessionIdHeader : undefined;
+    const existing = sessionId ? sessions.get(sessionId) : undefined;
+    if (existing) {
+      // HTTP request が届いた時点で activity を更新する。GET (standalone SSE を開く) は
+      // onmessage を経由しないため、ここでもタッチしておかないと standalone SSE 接続中の
+      // session が idle 判定されてしまう。
+      existing.lastActivityAt = Date.now();
+      await existing.front.handleRequest(req, res);
+      return;
+    }
 
-      // session id 付きなのに proxy 側に session が無い (sweep 済 / proxy 再起動後 等) ケースは
-      // spec の `MUST return 404 Not Found` に従う。新規 transport を作って handleRequest に渡すと
-      // 「Server not initialized」400 になってしまい、client が再 initialize に進めないため。
-      if (sessionId) {
-        return Response.json(
-          {
+    // session id 付きなのに proxy 側に session が無い (sweep 済 / proxy 再起動後 等) ケースは
+    // spec の `MUST return 404 Not Found` に従う。新規 transport を作って handleRequest に渡すと
+    // 「Server not initialized」400 になってしまい、client が再 initialize に進めないため。
+    if (sessionId) {
+      res
+        .writeHead(404, { "Content-Type": "application/json" })
+        .end(
+          JSON.stringify({
             jsonrpc: "2.0",
             id: null,
             error: { code: -32001, message: "Session not found" },
-          },
-          { status: 404 },
+          }),
         );
-      }
+      return;
+    }
 
-      // 新規 session: initialize POST の想定。SDK が sessionId を発行して
-      // onsessioninitialized を呼ぶので、そこで backend を起動して紐付ける。
-      const front = new WebStandardStreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: async (id) => {
-          try {
-            const backend = await startBackend(args, sharedOAuthFetch, sharedOAuthProvider);
-            const state: SessionState = {
-              id,
-              front,
-              backend,
-              clientRequestMethods: new Map(),
-              serverRequestIds: new Map(),
-              nextServerRequestSeq: 0,
-              lastActivityAt: Date.now(),
-              inFlightCount: 0,
-              closing: false,
-            };
-            wireBackendToFront(state);
-            sessions.set(id, state);
-            console.error(`[${name}] session opened id=${id}`);
-          } catch (e) {
-            console.error(`[${name}] failed to start backend for session ${id}:`, e);
-            void front.close();
-          }
-        },
-        // DELETE 受信時に SDK 自身が transport.close() を呼ぶため、ここでは closeFront=false で
-        // 二重 close を避ける。
-        onsessionclosed: async (id) => {
-          await closeSession(id, "client DELETE", false);
-        },
-      });
+    // 新規 session: initialize POST の想定。SDK が sessionId を発行して
+    // onsessioninitialized を呼ぶので、そこで backend を起動して紐付ける。
+    const front = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+      onsessioninitialized: async (id) => {
+        try {
+          const backend = await startBackend(args, sharedOAuthFetch, sharedOAuthProvider);
+          const state: SessionState = {
+            id,
+            front,
+            backend,
+            clientRequestMethods: new Map(),
+            serverRequestIds: new Map(),
+            nextServerRequestSeq: 0,
+            lastActivityAt: Date.now(),
+            inFlightCount: 0,
+            closing: false,
+          };
+          wireBackendToFront(state);
+          sessions.set(id, state);
+          console.error(`[${name}] session opened id=${id}`);
+        } catch (e) {
+          console.error(`[${name}] failed to start backend for session ${id}:`, e);
+          void front.close();
+        }
+      },
+      // DELETE 受信時に SDK 自身が transport.close() を呼ぶため、ここでは closeFront=false で
+      // 二重 close を避ける。
+      onsessionclosed: async (id) => {
+        await closeSession(id, "client DELETE", false);
+      },
+    });
 
-      await front.start();
-      return front.handleRequest(req);
-    },
+    await front.start();
+    await front.handleRequest(req, res);
   });
+
+  // SSE の long-lived stream を request / headers timeout で打ち切らないよう無効化する。
+  // node:http のデフォルト (requestTimeout=300000ms / headersTimeout=60000ms) は短く、
+  // クライアントが standalone SSE で待ち続けるユースケースでは切断事故になる。
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+
+  server.listen(port, hostname);
 
   // idle sweep: 5 秒ごとに「lastActivity から idleTimeoutMs を超え、かつ inFlight な request を
   // 持たない」session を閉じる。closing フラグでガードしているので、新規 request との race で
@@ -1085,7 +1144,8 @@ async function main(): Promise<void> {
 // CLI として直接起動された時のみ main() を走らせる。
 // test から `import { awaitOAuthCallback } from "../src/index.ts"` のように
 // import された場合は副作用 (CLI 引数解析・listen 開始) を発火させない。
-if (import.meta.main) {
+const entryPath = process.argv[1];
+if (entryPath !== undefined && import.meta.url === pathToFileURL(entryPath).href) {
   void main().catch((e: unknown) => {
     console.error(e);
     process.exit(1);

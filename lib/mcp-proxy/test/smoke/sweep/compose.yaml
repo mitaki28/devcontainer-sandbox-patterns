@@ -4,8 +4,7 @@ services:
     build:
       context: ../../..
     entrypoint:
-      - bun
-      - run
+      - node
       - src/index.ts
       - --listen
       - 0.0.0.0:8000
@@ -15,13 +14,12 @@ services:
       - "2000"
       - echo
       - --
-      - bun
-      - run
+      - node
       - /app/test/mocks/echo-mcp.ts
 
   sweep-smoke:
     image: mcp-proxy:dev
-    entrypoint: ["bun", "test", "test/smoke/sweep/smoke.test.ts"]
+    entrypoint: ["node", "--test", "test/smoke/sweep/smoke.test.ts"]
     environment:
       PROXY_URL: http://sweep-proxy:8000/mcp
       PROXY_TOKEN: testtoken

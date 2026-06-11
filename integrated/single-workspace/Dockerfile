@@ -42,7 +42,7 @@ ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/mitmproxy.crt \
 
 # bootstrap-ca.sh が CA install 完了後に setpriv で drop する非 root user。
 # javascript-node base は node user (uid 1000) を持つ。bootstrap-ca.sh は default を持たず
-# fail-fast 設計のため、recipe 側で必ず明示する (lib/mitm-proxy/README.md「信頼の前提」節参照)。
+# 未指定で起動拒否する設計のため、recipe 側で必ず明示する (lib/mitm-proxy/README.md「信頼の前提」節参照)。
 ENV WORKLOAD_USER=node
 
 # 起動時 CA bootstrap (lib/mitm-proxy/ から流用)。

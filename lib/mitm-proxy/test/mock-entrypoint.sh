@@ -18,4 +18,4 @@ openssl req -new -newkey rsa:2048 -days 30 -nodes -x509 \
     -addext 'subjectAltName=DNS:api.test,DNS:registry.test,DNS:echo.test,DNS:raw.content.test,DNS:denied.test,DNS:git.test' \
     >/dev/null 2>&1
 
-exec bun run /app/mock-server.ts
+exec node /app/mock-server.ts

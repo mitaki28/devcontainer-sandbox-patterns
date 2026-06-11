@@ -1,7 +1,8 @@
 // proxy/src/filter.ts の純粋ユニットテスト。
-// docker / network を使わず bun test 直で回せる。
+// docker / network を使わず `node --test` で直に回せる。
 
-import { describe, expect, test } from "bun:test";
+import { describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import {
   compileFilter,
@@ -15,22 +16,22 @@ import {
 describe("compileFilter", () => {
   test("empty allow + empty deny → 全許可", () => {
     const isAllowed = compileFilter({ allow: [], deny: [] });
-    expect(isAllowed("anything")).toBe(true);
-    expect(isAllowed("")).toBe(true);
+    assert.equal(isAllowed("anything"), true);
+    assert.equal(isAllowed(""), true);
   });
 
   test("allow のみ → 列挙されたものだけ通る", () => {
     const isAllowed = compileFilter({ allow: ["echo", "ping"], deny: [] });
-    expect(isAllowed("echo")).toBe(true);
-    expect(isAllowed("ping")).toBe(true);
-    expect(isAllowed("delete_file")).toBe(false);
+    assert.equal(isAllowed("echo"), true);
+    assert.equal(isAllowed("ping"), true);
+    assert.equal(isAllowed("delete_file"), false);
   });
 
   test("deny のみ → 列挙されたものだけ落ちる", () => {
     const isAllowed = compileFilter({ allow: [], deny: ["delete_file"] });
-    expect(isAllowed("delete_file")).toBe(false);
-    expect(isAllowed("read_file")).toBe(true);
-    expect(isAllowed("write_file")).toBe(true);
+    assert.equal(isAllowed("delete_file"), false);
+    assert.equal(isAllowed("read_file"), true);
+    assert.equal(isAllowed("write_file"), true);
   });
 
   test("両方指定 → deny が allow より優先", () => {
@@ -38,61 +39,61 @@ describe("compileFilter", () => {
       allow: ["read_*", "write_*"],
       deny: ["write_*"],
     });
-    expect(isAllowed("read_file")).toBe(true);
-    expect(isAllowed("write_file")).toBe(false);
-    expect(isAllowed("delete_file")).toBe(false);
+    assert.equal(isAllowed("read_file"), true);
+    assert.equal(isAllowed("write_file"), false);
+    assert.equal(isAllowed("delete_file"), false);
   });
 
   test("glob `*` が任意の文字列にマッチする", () => {
     const isAllowed = compileFilter({ allow: ["repos_*"], deny: [] });
-    expect(isAllowed("repos_get_issue")).toBe(true);
-    expect(isAllowed("repos_")).toBe(true);
-    expect(isAllowed("repos")).toBe(false);
-    expect(isAllowed("issues_get")).toBe(false);
+    assert.equal(isAllowed("repos_get_issue"), true);
+    assert.equal(isAllowed("repos_"), true);
+    assert.equal(isAllowed("repos"), false);
+    assert.equal(isAllowed("issues_get"), false);
   });
 
   test("glob はアンカー付き（部分一致しない）", () => {
     const isAllowed = compileFilter({ allow: ["read"], deny: [] });
-    expect(isAllowed("read")).toBe(true);
-    expect(isAllowed("read_file")).toBe(false);
-    expect(isAllowed("preread")).toBe(false);
+    assert.equal(isAllowed("read"), true);
+    assert.equal(isAllowed("read_file"), false);
+    assert.equal(isAllowed("preread"), false);
   });
 
   test("正規表現メタ文字は escape される", () => {
     const isAllowed = compileFilter({ allow: ["a.b"], deny: [] });
     // `.` がリテラルとして扱われる（正規表現の任意 1 文字ではない）
-    expect(isAllowed("a.b")).toBe(true);
-    expect(isAllowed("aXb")).toBe(false);
+    assert.equal(isAllowed("a.b"), true);
+    assert.equal(isAllowed("aXb"), false);
   });
 
   test("複数 `*` の組み合わせ", () => {
     const isAllowed = compileFilter({ allow: ["*_read_*"], deny: [] });
-    expect(isAllowed("repo_read_file")).toBe(true);
-    expect(isAllowed("foo_read_bar")).toBe(true);
-    expect(isAllowed("read_file")).toBe(false);
+    assert.equal(isAllowed("repo_read_file"), true);
+    assert.equal(isAllowed("foo_read_bar"), true);
+    assert.equal(isAllowed("read_file"), false);
   });
 });
 
 describe("isFilterActive", () => {
   test("両方空ならば false", () => {
-    expect(isFilterActive({ allow: [], deny: [] })).toBe(false);
+    assert.equal(isFilterActive({ allow: [], deny: [] }), false);
   });
   test("片方でも入っていれば true", () => {
-    expect(isFilterActive({ allow: ["x"], deny: [] })).toBe(true);
-    expect(isFilterActive({ allow: [], deny: ["x"] })).toBe(true);
+    assert.equal(isFilterActive({ allow: ["x"], deny: [] }), true);
+    assert.equal(isFilterActive({ allow: [], deny: ["x"] }), true);
   });
 });
 
 describe("parsePatternList", () => {
   test("undefined / 空文字 → 空配列", () => {
-    expect(parsePatternList(undefined)).toEqual([]);
-    expect(parsePatternList("")).toEqual([]);
+    assert.deepEqual(parsePatternList(undefined), []);
+    assert.deepEqual(parsePatternList(""), []);
   });
   test("カンマ区切りを trim", () => {
-    expect(parsePatternList("a, b ,  c")).toEqual(["a", "b", "c"]);
+    assert.deepEqual(parsePatternList("a, b ,  c"), ["a", "b", "c"]);
   });
   test("空要素を除去", () => {
-    expect(parsePatternList("a,,b,")).toEqual(["a", "b"]);
+    assert.deepEqual(parsePatternList("a,,b,"), ["a", "b"]);
   });
 });
 
@@ -115,7 +116,7 @@ describe("filterToolsListResponse", () => {
     const filtered = filterToolsListResponse(msg, isAllowed);
     const tools = (filtered as unknown as { result: { tools: Array<{ name: string }> } }).result
       .tools;
-    expect(tools.map((t) => t.name)).toEqual(["read_file"]);
+    assert.deepEqual(tools.map((t) => t.name), ["read_file"]);
   });
 
   test("入力 message を mutate しない", () => {
@@ -128,7 +129,7 @@ describe("filterToolsListResponse", () => {
     };
     const before = JSON.stringify(msg);
     filterToolsListResponse(msg as JSONRPCMessage, isAllowed);
-    expect(JSON.stringify(msg)).toBe(before);
+    assert.equal(JSON.stringify(msg), before);
   });
 
   test("nextCursor 等の他フィールドを保つ", () => {
@@ -142,7 +143,8 @@ describe("filterToolsListResponse", () => {
     } as JSONRPCMessage;
 
     const filtered = filterToolsListResponse(msg, isAllowed);
-    expect((filtered as unknown as { result: { nextCursor: string } }).result.nextCursor).toBe(
+    assert.equal(
+      (filtered as unknown as { result: { nextCursor: string } }).result.nextCursor,
       "page-2",
     );
   });
@@ -154,7 +156,7 @@ describe("filterToolsListResponse", () => {
       error: { code: -32603, message: "internal" },
     } as JSONRPCMessage;
     const out = filterToolsListResponse(msg, isAllowed);
-    expect(out).toBe(msg);
+    assert.equal(out, msg);
   });
 
   test("result.tools が無い response はそのまま返す", () => {
@@ -164,14 +166,14 @@ describe("filterToolsListResponse", () => {
       result: { foo: "bar" },
     } as JSONRPCMessage;
     const out = filterToolsListResponse(msg, isAllowed);
-    expect(out).toBe(msg);
+    assert.equal(out, msg);
   });
 });
 
 describe("methodNotFoundError", () => {
   test("JSON-RPC error -32601 を id 付きで返す", () => {
     const err = methodNotFoundError(42, "delete_file");
-    expect(err).toEqual({
+    assert.deepEqual(err, {
       jsonrpc: "2.0",
       id: 42,
       error: {
@@ -183,14 +185,14 @@ describe("methodNotFoundError", () => {
 
   test("string id にも対応する", () => {
     const err = methodNotFoundError("abc", "x");
-    expect((err as { id: string }).id).toBe("abc");
+    assert.equal((err as { id: string }).id, "abc");
   });
 });
 
 describe("invalidParamsError", () => {
   test("JSON-RPC error -32602 を id 付きで返す", () => {
     const err = invalidParamsError(7, "tools/call params.name must be a string");
-    expect(err).toEqual({
+    assert.deepEqual(err, {
       jsonrpc: "2.0",
       id: 7,
       error: {
@@ -202,6 +204,6 @@ describe("invalidParamsError", () => {
 
   test("string id にも対応する", () => {
     const err = invalidParamsError("abc", "x");
-    expect((err as { id: string }).id).toBe("abc");
+    assert.equal((err as { id: string }).id, "abc");
   });
 });

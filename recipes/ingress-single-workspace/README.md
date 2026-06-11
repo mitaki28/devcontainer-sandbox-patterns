@@ -128,7 +128,7 @@ HOST_PORT=8081
 ## 信頼の前提
 
 - Docker (dockerd / network namespace) の隔離を信頼する (`alternatives/simple-http-proxy/` と同じ)
-- 「カーネルの脆弱性 / docker socket 不正アクセスで netns を抜けられる」脅威モデルは本レシピのスコープ外
+- 「カーネルの脆弱性 / docker socket 不正アクセスで netns を抜けられる」ケースは本レシピのスコープ外
 
 ## 漏れる余地 / 限界
 

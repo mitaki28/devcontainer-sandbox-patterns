@@ -32,7 +32,7 @@
 - **shared-infra**: `docker compose -p devsbx-infra up -d` で **1 度だけ常駐起動**。全作業コンテナで共有されるプロキシ群と共有のリバースプロキシが立ち上がる
 - **per-task workspace**: `docker compose -p <task> up -d` で **タスクごとに別 compose プロジェクトとして起動**。`<task>` の値がそのままサブドメインの接頭辞 (`<task>.devsbx.localhost:8080`) になる
 
-作業コンテナ側は **2 つのネットワークに参加** する: 自分専用の `<task>_internal` (internal: true、外向き通信を Docker ネットワーク設定で遮断) と、shared-infra と共有する `devsbx-shared` (shared-infra が `name: devsbx-shared` で明示作成、per-task が `external: true` で参照)。前者で外部への外向き通信を塞ぎつつ、後者で shared-infra 経由でしか外に出られない構造になる。
+作業コンテナ側は **2 つのネットワークに参加** する: 自分専用の `<task>_internal` (internal: true、外向き通信を Docker ネットワーク設定で遮断) と、shared-infra と共有する `devsbx-shared` (こちらも internal: true。shared-infra が `name: devsbx-shared` で明示作成、per-task が `external: true` で参照)。どちらのネットワークも外部への直接経路を持たないため、shared-infra のプロキシ群経由でしか外に出られない構造になる。
 
 ## 4. ルーティング管理を Docker DNS に移譲する
 
@@ -45,29 +45,29 @@
 - **Caddy admin API を露出する必要がない** — 作業コンテナから admin ルートを書き換える経路を作らない
 - **共有の名前付きボリュームにスニペットを書き込む経路がない** — 作業コンテナ間でスニペットを改変するリスクを作らない
 
-つまり [03-foundation.md](./03-foundation.md) の安全性モデル条件 1 で前提にした **Docker デーモン / Docker DNS の信頼性を、ルーティング管理のための制御層として活用する** ことで、それより上のレイヤ (Caddy 設定) を完全に静的に保てる、というのが本設計の肝である。新しい信頼境界 (admin API / 共有ボリューム) を増やさずに動的ルーティングを実現する。
+つまり [03-foundation.md](./03-foundation.md) で具体化した §2.1 の条件 1 (基盤技術) で前提にした **Docker デーモン / Docker DNS の信頼性を、ルーティング管理のための制御層として活用する** ことで、それより上のレイヤ (Caddy 設定) を完全に静的に保てる、というのが本設計の肝である。新しい信頼境界 (admin API / 共有ボリューム) を増やさずに動的ルーティングを実現する。
 
 実装上の Caddyfile / Docker DNS の挙動 (サブドメインの正規表現マッチの書き方、起動 / 停止時の DNS 反映、Caddy の DNS キャッシュ周りの挙動) は [`integrated/multi-workspace/README.md`](../integrated/multi-workspace/) および単体検証用に切り出した [`recipes/ingress-multi-workspace/`](../recipes/ingress-multi-workspace/) を参照。
 
 ## 5. 共有構成のトレードオフ (許容する漏れ)
 
-2 層構造は単独起動より構造が複雑になり、その代償として **本リポジトリで明示的に許容する漏れ** がいくつか生まれる。すべて個人開発前提の脅威モデル外として位置付けてある:
+2 層構造は単独起動より構造が複雑になり、その代償として **本リポジトリで明示的に許容する漏れ** がいくつか生まれる。すべて個人開発前提で、想定する脅威の範囲外として位置付けてある:
 
 - **作業コンテナ間の到達可能性** — `devsbx-shared` 1 ネットワークに全作業コンテナが参加するため、作業コンテナ A が作業コンテナ B の `:3000` に到達可能。「個人開発者が並列で作業コンテナを回す」前提で許容
-- **Docker デーモンを共有する他 compose プロジェクトからの到達** — `devsbx-shared` / `devsbx-external` は別 compose プロジェクトから参照させるため `name:` 固定で公開している。その代償として、同 Docker デーモンを使う任意の他 compose プロジェクトが `external: true, name: devsbx-shared` で参加可能 = mcp-proxy 等を Bearer 無しで叩ける位置に立てる。**Docker デーモンを共有する他プロジェクトは信頼前提** で運用する (= Docker デーモン上に起動するもの全てが利用者本人の責務)
+- **Docker デーモンを共有する他 compose プロジェクトからの到達** — `devsbx-shared` / `devsbx-external` は別 compose プロジェクトから参照させるため `name:` 固定で公開している。その代償として、同 Docker デーモンを使う任意の他 compose プロジェクトが `external: true, name: devsbx-shared` で参加可能 = プロキシ群に到達できる位置に立てる (mcp-* プロキシは `PROXY_TOKEN` の Bearer 認証で防がれるが、接続認証を持たない git-gateway / mitm-proxy はそのまま利用できてしまう)。**Docker デーモンを共有する他プロジェクトは信頼前提** で運用する (= Docker デーモン上に起動するもの全てが利用者本人の責務)
 - **shared-infra 全体の侵害時の影響範囲** — 共有サービスが侵害されると全作業コンテナに影響波及。単独構成 (`integrated/single-workspace/`) より影響範囲が大きい
 
-これらは共用の開発マシン / CI ランナーで本レシピを使う場合に問題になり得る。その場合は共有の秘匿情報による認証や別の Docker デーモン (rootless docker / Podman 等) への分離を別途検討する必要がある。個人開発ローカルでは脅威モデル外として割り切る。
+これらは共用の開発マシン / CI ランナーで本レシピを使う場合に問題になり得る。その場合は共有の秘匿情報による認証や別の Docker デーモン (rootless docker / Podman 等) への分離を別途検討する必要がある。個人開発ローカルでは想定する脅威の範囲外として割り切る。
 
 ## 6. 評価軸との対応
 
-[02-design.md](./02-design.md) §4 の 4 評価軸 + cloud (§6) で導入した「プロキシ内の認証情報の短寿命化」軸を、本統合構成がどう満たすか:
+[02-design.md](./02-design.md) §4 の 4 評価軸 + cloud の章 ([06-cloud-mcp.md](./06-cloud-mcp.md) §3.2) で導入した「プロキシ内に長寿命の認証情報を置かない」軸を、本統合構成がどう満たすか:
 
 | 評価軸 | 本レシピがどう満たすか |
 |---|---|
 | 秘匿情報は作業コンテナ外に置く | API トークン / OAuth リフレッシュトークン / CA 秘密鍵はすべてホスト側 (`env_file` / バインドマウント) または shared-infra 内の名前付きボリュームに閉じ、プロキシ群だけが読み込む。作業コンテナ側のファイルシステムにも環境変数にも入らない |
 | 作業コンテナはプロキシのみと通信する | 作業コンテナは `<task>_internal` (internal: true) + `devsbx-shared` (internal: true) の 2 ネットワークに閉じ、プロキシ群経由でしか外に出られない |
-| ACL はプロキシ側で評価する | 操作粒度 (MCP ツール名) / HTTP 層 (ホスト × HTTP メソッド × パス) / Git transport (ref / リポジトリ) の 3 軸すべて shared-infra 側で評価 |
+| ACL はプロキシ側で評価する | 操作粒度 (MCP ツール名) / HTTP 層 (ホスト × HTTP メソッド × パス) / Git transport (リポジトリ / ref / commit) の 3 軸すべて shared-infra 側で評価 |
 | 境界ドメインは信頼できる先に限定する | mitm-proxy のポリシー + git-gateway の `UPSTREAM_BASE_URL` で明示列挙されたドメインだけが通る |
 | (cloud で追加) プロキシ内に長寿命の認証情報を置かない | shared-infra の `mcp-gcloud-proxy` はホスト側で発行された 1h 寿命の SA アクセストークンを ro mount で読むだけ。リフレッシュトークン / 個人 ADC は shared-infra にも作業コンテナにも届かない |
 
@@ -81,7 +81,7 @@
 
 ## 8. 統合構成までの到達点
 
-ここまでで本リポジトリが提示する 2 つの統合構成 (`integrated/single-workspace/` と `integrated/multi-workspace/`) が出揃った。本書の安全性モデル ([02-design.md](./02-design.md) §2) で示した「3 層に脆弱性がない限り情報漏洩を起こさない」設計が、5 つの評価軸を満たす形で単独 / 並列の両構成に展開されたことを、本章までの 11 章で見てきた。
+ここまでで本リポジトリが提示する 2 つの統合構成 (`integrated/single-workspace/` と `integrated/multi-workspace/`) が出揃った。本書の前提と保証 ([02-design.md](./02-design.md) §2) — 3 層を信頼できる前提の下で「秘匿情報を漏らさない / 任意ホストに出ない / 許可外操作を通さない」ことを設計目標とする境界線 — が、5 つの評価軸を満たす形で単独 / 並列の両構成に展開されたことを、本章までの 11 章で見てきた。
 
 本書本編はここで一区切り。
 

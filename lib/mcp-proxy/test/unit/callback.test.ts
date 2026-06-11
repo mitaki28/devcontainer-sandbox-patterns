@@ -2,7 +2,8 @@
 // 本物の OAuth provider を立てずに、verifyState を mock した形で挙動だけ検証する。
 
 import net from "node:net";
-import { describe, expect, test } from "bun:test";
+import { describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { awaitOAuthCallback, CallbackTimeoutError } from "../../src/index.ts";
 
 const CALLBACK_PATH = "/callback";
@@ -22,6 +23,26 @@ function findFreePort(): Promise<number> {
       }
       const port = addr.port;
       srv.close(() => resolve(port));
+    });
+  });
+}
+
+/**
+ * fetch では送れない生の HTTP リクエスト (不正な Host ヘッダ等) を 1 本投げて、
+ * ステータス行を返す。接続が閉じられたら resolve する。
+ */
+function sendRawRequest(port: number, rawRequest: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const sock = net.connect(port, "127.0.0.1", () => {
+      sock.write(rawRequest);
+    });
+    let buf = "";
+    sock.on("data", (d) => {
+      buf += d.toString();
+    });
+    sock.on("error", reject);
+    sock.on("close", () => {
+      resolve(buf.split("\r\n")[0] ?? "");
     });
   });
 }
@@ -52,26 +73,26 @@ async function startCallbackOnFreePort(opts: {
 }
 
 describe("awaitOAuthCallback", () => {
-  test("state 一致の正規 callback で code を resolve する", async () => {
+  test("state 一致の正規 callback で code を resolve する", { timeout: 10_000 }, async () => {
     const expected = "the-state";
     const { port, promise } = await startCallbackOnFreePort({
       expectedState: expected,
       timeoutMs: 5_000,
     });
     const bad1 = await fetch(`http://localhost:${String(port)}${CALLBACK_PATH}?code=injected`);
-    expect(bad1.status).toBe(400);
+    assert.equal(bad1.status, 400);
     const bad2 = await fetch(
       `http://localhost:${String(port)}${CALLBACK_PATH}?code=injected&state=wrong`,
     );
-    expect(bad2.status).toBe(400);
+    assert.equal(bad2.status, 400);
     const ok = await fetch(
       `http://localhost:${String(port)}${CALLBACK_PATH}?code=legit&state=${expected}`,
     );
-    expect(ok.status).toBe(200);
-    expect(await promise).toBe("legit");
-  }, 10_000);
+    assert.equal(ok.status, 200);
+    assert.equal(await promise, "legit");
+  });
 
-  test("state 不一致の error injection で Promise は settle しない", async () => {
+  test("state 不一致の error injection で Promise は settle しない", { timeout: 10_000 }, async () => {
     const expected = "the-state";
     const { port, promise } = await startCallbackOnFreePort({
       expectedState: expected,
@@ -90,17 +111,39 @@ describe("awaitOAuthCallback", () => {
     const bad = await fetch(
       `http://localhost:${String(port)}${CALLBACK_PATH}?error=access_denied`,
     );
-    expect(bad.status).toBe(400);
+    assert.equal(bad.status, 400);
     const ok = await fetch(
       `http://localhost:${String(port)}${CALLBACK_PATH}?code=legit&state=${expected}`,
     );
-    expect(ok.status).toBe(200);
-    expect(await promise).toBe("legit");
-    expect(resolved).toBe("legit");
-    expect(rejected).toBeUndefined();
-  }, 10_000);
+    assert.equal(ok.status, 200);
+    assert.equal(await promise, "legit");
+    assert.equal(resolved, "legit");
+    assert.equal(rejected, undefined);
+  });
 
-  test("timeout で CallbackTimeoutError として reject する", async () => {
+  test("不正な Host ヘッダでも listener はクラッシュせず継続する", { timeout: 10_000 }, async () => {
+    const expected = "the-state";
+    const { port, promise } = await startCallbackOnFreePort({
+      expectedState: expected,
+      timeoutMs: 5_000,
+    });
+    // base に Host ヘッダを使っていると `new URL` が throw して同期ハンドラ内の
+    // 例外でプロセスごと落ちる。スペース入りの不正 Host を投げて、listener が
+    // 生き残ること (= 後続の正規 callback が成功すること) を確認する。
+    const statusLine = await sendRawRequest(
+      port,
+      `GET ${CALLBACK_PATH}?code=injected HTTP/1.1\r\nHost: a b\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(statusLine, /^HTTP\/1\.1 400/);
+    // listener が生きていれば正規 callback は通る。
+    const ok = await fetch(
+      `http://localhost:${String(port)}${CALLBACK_PATH}?code=legit&state=${expected}`,
+    );
+    assert.equal(ok.status, 200);
+    assert.equal(await promise, "legit");
+  });
+
+  test("timeout で CallbackTimeoutError として reject する", { timeout: 10_000 }, async () => {
     const { promise } = await startCallbackOnFreePort({
       expectedState: "unused",
       timeoutMs: 200,
@@ -109,11 +152,11 @@ describe("awaitOAuthCallback", () => {
     await promise.catch((e: unknown) => {
       caught = e;
     });
-    expect(caught).toBeInstanceOf(CallbackTimeoutError);
-    expect((caught as Error).message).toContain("200");
-  }, 10_000);
+    assert.ok(caught instanceof CallbackTimeoutError);
+    assert.ok((caught as Error).message.includes("200"));
+  });
 
-  test("正規 error (state 一致) は reject にする", async () => {
+  test("正規 error (state 一致) は reject にする", { timeout: 10_000 }, async () => {
     const expected = "the-state";
     const { port, promise } = await startCallbackOnFreePort({
       expectedState: expected,
@@ -128,9 +171,9 @@ describe("awaitOAuthCallback", () => {
       `http://localhost:${String(port)}${CALLBACK_PATH}` +
         `?error=access_denied&error_description=user+denied&state=${expected}`,
     );
-    expect(res.status).toBe(400);
+    assert.equal(res.status, 400);
     await settled;
-    expect((caught as Error).message).toContain("access_denied");
-    expect((caught as Error).message).toContain("user denied");
-  }, 10_000);
+    assert.ok((caught as Error).message.includes("access_denied"));
+    assert.ok((caught as Error).message.includes("user denied"));
+  });
 });

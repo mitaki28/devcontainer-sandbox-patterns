@@ -112,8 +112,7 @@ services:
   mcp-github-proxy:
     build:
       context: ../../../lib/mcp-proxy
-      dockerfile: Dockerfile.binary
-    image: mcp-proxy:bin
+    image: mcp-proxy:dev
     # hostname は `<provider>.mcp.devsbx.internal` 規約 (FQDN suffix で MCP 群一括識別可能)。
     # service key は alphanumeric + - のままで CLI コマンドの安定性を優先。
     hostname: github.mcp.devsbx.internal
@@ -132,7 +131,7 @@ services:
     # 破壊系を MCP に通したい個別ケースは --allow-tool を都度追加する。
     command:
       - >
-        exec mcp-proxy --listen 0.0.0.0:8000 -t http
+        exec node src/index.ts --listen 0.0.0.0:8000 -t http
         --token "$$PROXY_TOKEN"
         -H "Authorization: Bearer $$GITHUB_PAT"
         --allow-tool 'get_*'
@@ -149,8 +148,7 @@ services:
   mcp-context7-proxy:
     build:
       context: ../../../lib/mcp-proxy
-      dockerfile: Dockerfile.binary
-    image: mcp-proxy:bin
+    image: mcp-proxy:dev
     hostname: context7.mcp.devsbx.internal
     env_file:
       - path: ${HOME}/.config/devsbx/mcp-context7.env
@@ -162,12 +160,12 @@ services:
     command:
       - |
         if [ -n "$$CONTEXT7_API_KEY" ]; then
-          exec mcp-proxy --listen 0.0.0.0:8000 -t http \
+          exec node src/index.ts --listen 0.0.0.0:8000 -t http \
             --token "$$PROXY_TOKEN" \
             -H "CONTEXT7_API_KEY: $$CONTEXT7_API_KEY" \
             context7 https://mcp.context7.com/mcp
         else
-          exec mcp-proxy --listen 0.0.0.0:8000 -t http \
+          exec node src/index.ts --listen 0.0.0.0:8000 -t http \
             --token "$$PROXY_TOKEN" \
             context7 https://mcp.context7.com/mcp
         fi
@@ -185,7 +183,7 @@ services:
     build:
       context: ../../..
       dockerfile: recipes/cloud-mcp-with-short-lived-credential/Dockerfile.gcloud-mcp
-    image: gcp-mcp-proxy:bin
+    image: gcp-mcp-proxy:dev
     hostname: gcloud.mcp.devsbx.internal
     env_file:
       - path: ${HOME}/.config/devsbx/gcp-mcp.env
@@ -201,16 +199,16 @@ services:
           create_host_path: false
     environment:
       CLOUDSDK_AUTH_ACCESS_TOKEN_FILE: /tokens/token
-    working_dir: /opt/gcp-mcp
+    working_dir: /app
     entrypoint: ["/bin/sh", "-c", "--"]
     command:
       - >
-        exec mcp-proxy --listen 0.0.0.0:8000
+        exec node src/index.ts --listen 0.0.0.0:8000
         --token "$$PROXY_TOKEN"
         --pass-env GOOGLE_CLOUD_PROJECT
         --pass-env CLOUDSDK_CORE_PROJECT
         --pass-env CLOUDSDK_AUTH_ACCESS_TOKEN_FILE
-        gcloud -- pnpm exec gcloud-mcp
+        gcloud -- pnpm --dir /opt/gcp-mcp exec gcloud-mcp
     networks:
       shared:
         aliases:
@@ -220,8 +218,7 @@ services:
   mcp-atlassian-proxy:
     build:
       context: ../../../lib/mcp-proxy
-      dockerfile: Dockerfile.binary
-    image: mcp-proxy:bin
+    image: mcp-proxy:dev
     hostname: atlassian.mcp.devsbx.internal
     volumes:
       - type: bind
@@ -245,7 +242,7 @@ services:
     # 経由で host から 127.0.0.1:3030 を叩いても container の eth0 には届かない)。
     command:
       - >
-        exec mcp-proxy --listen 0.0.0.0:8000 -t http
+        exec node src/index.ts --listen 0.0.0.0:8000 -t http
         --token "$$PROXY_TOKEN"
         --oauth --callback-listen 0.0.0.0:3030 --token-store /data
         atlassian https://mcp.atlassian.com/v1/mcp/authv2

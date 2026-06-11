@@ -14,49 +14,61 @@
 //   - POST /anything/<seg>  → 200 + {method, url, json} を JSON で echo (allow_rules の検証用)
 //   - その他                 → 200 "mock-ok ..." (届けば必ず 200。proxy で deny されれば届かない)
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:https";
 
-const cert = await Bun.file("/certs/mock-target.crt").text();
-const key = await Bun.file("/certs/mock-target.key").text();
+const cert = readFileSync("/certs/mock-target.crt");
+const key = readFileSync("/certs/mock-target.key");
 
-const server = Bun.serve({
-  port: 443,
-  tls: { cert, key },
-  async fetch(req) {
-    const url = new URL(req.url);
-    const host = req.headers.get("host") ?? url.hostname;
+const PORT = 443;
 
-    if (req.method === "GET" && url.pathname === "/headers") {
-      const headers: Record<string, string> = {};
-      for (const [k, v] of req.headers.entries()) {
+const server = createServer({ cert, key }, async (req, res) => {
+  const host = req.headers.host ?? "mock-target";
+  const url = new URL(req.url ?? "/", `https://${host}`);
+
+  if (req.method === "GET" && url.pathname === "/headers") {
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (Array.isArray(v)) {
+        headers[k] = v.join(", ");
+      } else if (typeof v === "string") {
         headers[k] = v;
       }
-      return Response.json({ headers });
     }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ headers }));
+    return;
+  }
 
-    if (req.method === "POST" && url.pathname.startsWith("/anything/")) {
-      let json: unknown = null;
-      const ct = req.headers.get("content-type") ?? "";
-      if (ct.includes("application/json")) {
-        try {
-          json = await req.json();
-        } catch {
-          json = null;
-        }
+  if (req.method === "POST" && url.pathname.startsWith("/anything/")) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(chunk as Buffer);
+    }
+    let json: unknown = null;
+    const ct = req.headers["content-type"] ?? "";
+    if (typeof ct === "string" && ct.includes("application/json")) {
+      try {
+        json = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        json = null;
       }
-      return Response.json({
-        method: req.method,
-        url: `https://${host}${url.pathname}${url.search}`,
-        json,
-      });
     }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      method: req.method,
+      url: `https://${host}${url.pathname}${url.search}`,
+      json,
+    }));
+    return;
+  }
 
-    return new Response(`mock-ok ${req.method} ${host}${url.pathname}\n`, {
-      status: 200,
-    });
-  },
+  res.writeHead(200, { "content-type": "text/plain" });
+  res.end(`mock-ok ${req.method} ${host}${url.pathname}\n`);
 });
 
-// listen 完了後に .ready を touch して、smoke コンテナの wait-for を解除する。
-writeFileSync("/certs/.ready", "");
-console.log(`mock-target: TLS listening on :${server.port}`);
+server.listen(PORT, () => {
+  // listen 完了後に .ready を touch して、smoke コンテナの wait-for を解除する。
+  writeFileSync("/certs/.ready", "");
+  console.log(`mock-target: TLS listening on :${PORT}`);
+});

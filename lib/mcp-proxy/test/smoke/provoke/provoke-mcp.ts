@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 // proxy が server-initiated message を front (client) に正しく転送することを確認するための mock backend。
 // `provoke` tool が呼ばれると、次の 2 つを順に発火する:
 //   1. sendToolListChanged() — server-initiated notification (id 無し)

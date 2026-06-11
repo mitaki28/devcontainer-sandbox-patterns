@@ -3,7 +3,7 @@
   "dockerComposeFile": "../compose.yaml",
   "service": "workspace",
   "workspaceFolder": "/workspace",
-  // workspace コンテナは bootstrap-ca.sh が setpriv で bun (uid 1000) に drop する。
+  // workspace コンテナは bootstrap-ca.sh が setpriv で node (uid 1000) に drop する。
   // VS Code / Cursor 側もそれに合わせる (root にしない)。
-  "remoteUser": "bun"
+  "remoteUser": "node"
 }

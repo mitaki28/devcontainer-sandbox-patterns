@@ -319,15 +319,15 @@ cd shared-infra && docker compose -p devsbx-infra down
 
 ## 漏れる余地
 
-1. **作業コンテナ間の到達可能性**: `devsbx-shared` 1 ネットワーク統合の副作用で、作業コンテナ A が作業コンテナ B の `:3000` に到達可能。個人開発前提で脅威モデル外として許容
+1. **作業コンテナ間の到達可能性**: `devsbx-shared` 1 ネットワーク統合の副作用で、作業コンテナ A が作業コンテナ B の `:3000` に到達可能。個人開発前提で許容範囲とする
 2. **shared-infra 全体の侵害**: 共有サービスが侵害されると全作業コンテナに影響波及。被害範囲が単独の single-workspace より広い
 3. **single-workspace と同様の漏れ余地**: プロキシ経由のアクション全般、mitmproxy 自身が信頼境界の主体になる、リバースプロキシ (Caddy) が信頼境界の主体になる、ビルド時インストールの postinstall スクリプト — 詳細は [`../single-workspace/`](../single-workspace/) の同節
-4. **同じ Docker デーモンを共有する他 compose プロジェクトからの到達**: `devsbx-shared` / `devsbx-external` は別 compose プロジェクトから参照させるため `name:` 固定で公開している。その代償として、同じ Docker デーモンを使う任意の他 compose プロジェクトが `external: true, name: devsbx-shared` で join 可能 = mcp-proxy 等を Bearer 無しで叩ける位置に立てる。**Docker デーモンを共有する他プロジェクトは信頼前提** で運用 (= Docker デーモン上に起動するもの全てが利用者本人の責務)。共用の開発マシンや CI ランナーで本レシピを使う場合は、共有の秘匿情報による認証や別のデーモン (rootless docker / Podman 等) への分離を別途検討
+4. **同じ Docker デーモンを共有する他 compose プロジェクトからの到達**: `devsbx-shared` / `devsbx-external` は別 compose プロジェクトから参照させるため `name:` 固定で公開している。その代償として、同じ Docker デーモンを使う任意の他 compose プロジェクトが `external: true, name: devsbx-shared` で join 可能 = プロキシ群に到達できる位置に立てる (mcp-* プロキシは `PROXY_TOKEN` の Bearer 認証で防がれるが、接続認証を持たない git-gateway / mitmproxy はそのまま利用できてしまう)。**Docker デーモンを共有する他プロジェクトは信頼前提** で運用 (= Docker デーモン上に起動するもの全てが利用者本人の責務)。共用の開発マシンや CI ランナーで本レシピを使う場合は、共有の秘匿情報による認証や別のデーモン (rootless docker / Podman 等) への分離を別途検討
 5. **作業コンテナ内の RCE → 配布されたトークンと等価な権限**: GitHub PAT スコープの最小化が事故時の被害上限を決める (上記「GitHub PAT スコープの最小化」節)
 
 ## 既知の制約
 
-- **shared-infra の先行起動が必須**: per-task compose は `external: true` で `devsbx-shared` を参照するため、shared-infra 不在では起動失敗 (fail-fast で良い挙動)
+- **shared-infra の先行起動が必須**: per-task compose は `external: true` で `devsbx-shared` を参照するため、shared-infra 不在では起動失敗 (起動時点で失敗するのが妥当な挙動)
 - **single-workspace との同時起動不可**: ホストポート 8080 / 3030 衝突 + OAuth トークンストア共有によるリフレッシュ競合
 - **task 名の制約**: 小文字英数字 + ハイフンのみ (サブドメイン RFC 1123)
 - **HTTPS 化未対応**: ホストブラウザから `http://` のみ。Service Worker / SameSite=None Cookie 等の挙動を再現したい場合は本レシピでは対応していない

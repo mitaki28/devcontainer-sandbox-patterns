@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 // proxy の OAuth フロー全体を oauth-mock 相手に自動 smoke 化する。
 //
 // flow:
@@ -13,12 +12,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const BACKEND = Bun.env["OAUTH_BACKEND"] ?? "http://oauth-mock:3000/mcp";
+const BACKEND = process.env["OAUTH_BACKEND"] ?? "http://oauth-mock:3000/mcp";
 const PROXY_LISTEN = "127.0.0.1:8000";
 const CALLBACK_LISTEN = "127.0.0.1:3030";
 // OAUTH_REFRESH_DEDUP=1 で proxy 起動時に --oauth-refresh-dedup を付け、
 // dedup 有効でも OAuth flow / tools/list / tools/call が壊れないことを確認する。
-const OAUTH_REFRESH_DEDUP = Bun.env["OAUTH_REFRESH_DEDUP"] === "1";
+const OAUTH_REFRESH_DEDUP = process.env["OAUTH_REFRESH_DEDUP"] === "1";
 const TOKEN_STORE = `/tmp/oauth-tokens-${String(Date.now())}`;
 // mcp-proxy への incoming bearer。harness と proxy で共有する。
 const PROXY_TOKEN = "smoke-oauth-token";
@@ -40,7 +39,7 @@ async function waitMock(url: string, ms: number): Promise<void> {
     } catch {
       // not ready yet
     }
-    await Bun.sleep(200);
+    await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error(`mock did not become ready: ${url}`);
 }
@@ -52,7 +51,6 @@ console.error("[harness] mock is ready");
 
 console.error("[harness] starting proxy subprocess");
 const proxyArgs = [
-  "run",
   "src/index.ts",
   "--listen",
   PROXY_LISTEN,
@@ -70,7 +68,7 @@ if (OAUTH_REFRESH_DEDUP) {
   proxyArgs.push("--oauth-refresh-dedup");
 }
 proxyArgs.push("oauth-test", BACKEND);
-const proxy = spawn("bun", proxyArgs, { stdio: ["ignore", "pipe", "pipe"] });
+const proxy = spawn("node", proxyArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
 let authorizationUrl: string | undefined;
 let listening = false;
@@ -90,7 +88,7 @@ proxy.on("exit", (code) => {
 const waitFor = async (predicate: () => boolean, label: string, ms: number): Promise<void> => {
   const start = Date.now();
   while (!predicate() && Date.now() - start < ms) {
-    await Bun.sleep(100);
+    await new Promise((r) => setTimeout(r, 100));
   }
   if (!predicate()) fail(proxy, `timeout waiting for ${label}`);
 };

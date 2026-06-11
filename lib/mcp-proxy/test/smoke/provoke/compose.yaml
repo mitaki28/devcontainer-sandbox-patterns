@@ -4,8 +4,7 @@ services:
     build:
       context: ../../..
     entrypoint:
-      - bun
-      - run
+      - node
       - src/index.ts
       - --listen
       - 0.0.0.0:8000
@@ -13,13 +12,12 @@ services:
       - testtoken
       - provoker
       - --
-      - bun
-      - run
+      - node
       - /app/test/smoke/provoke/provoke-mcp.ts
 
   provoke-smoke:
     image: mcp-proxy:dev
-    entrypoint: ["bun", "test", "test/smoke/provoke/smoke.test.ts"]
+    entrypoint: ["node", "--test", "test/smoke/provoke/smoke.test.ts"]
     environment:
       PROXY_URL: http://provoke-proxy:8000/mcp
       PROXY_TOKEN: testtoken

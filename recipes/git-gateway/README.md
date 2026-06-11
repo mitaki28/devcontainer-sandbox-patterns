@@ -169,7 +169,7 @@ handle @push_1 {
 }
 ```
 
-リポジトリごとのハンドラが直接 fcgiwrap へ FastCGI で投げるので、内部 rewrite + ScriptAlias 経由の public な迂回 URL は存在しない。**push の入口はリポジトリごとのハンドラのみ** で、未登録リポジトリは path マッチャの段階でこのハンドラに届かない。
+リポジトリごとのハンドラが直接 fcgiwrap へ FastCGI で投げる。**push の入口はリポジトリごとのハンドラのみ** で、未登録リポジトリは path マッチャの段階でこのハンドラに届かない。
 
 ### 未登録リポジトリの handle
 
@@ -255,7 +255,7 @@ fetch URL = push URL = git-gateway に揃ったが、ゲートウェイ内部で
 4. **`.git/config` 由来の URL 書換 → 攻撃者先への push**: PAT が作業コンテナに居ないため **PAT 漏洩は起きない** が、コミット内容は攻撃者先に流出しうる。本構成では `internal: true` ネットワーク + 上流ホスト名の許可リスト (本番では `integrated/multi-workspace/` で実装) で作業コンテナから git-gateway 以外への TCP を Docker ネットワーク設定で塞ぐ前提
 5. **コミット内容自体のスキャン (秘匿情報等) は未実装**: `pre-receive` 内で `git diff-tree` ベースのスキャンを足せば可能
 6. **本レシピは smoke 単独構成**: 実 GitHub への push 経路を組むには `UPSTREAM_BASE_URL=https://github.com/` + `GITHUB_PAT` を env_file で設定 + ネットワークで `github.com` への外向き通信を絞る統合が必要 (統合構成は `integrated/single-workspace/` / `integrated/multi-workspace/` の役割)
-7. **fcgiwrap / caddy のプロセス監視は最小限**: entrypoint は fcgiwrap をバックグラウンド、caddy をフォアグラウンドで動かすだけで、fcgiwrap が落ちても caddy は気付かない (push が 502 になるのみ)。本番運用ではスーパーバイザ (s6, runit, tini --) を挟むのが望ましい
+7. **fcgiwrap / caddy のプロセス監視は最小限**: entrypoint は fcgiwrap をバックグラウンド、caddy をフォアグラウンドで動かすだけで、fcgiwrap が落ちても caddy は気付かない (push が 502 になるのみ)
 
 ## 関連
 

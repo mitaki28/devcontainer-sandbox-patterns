@@ -3,7 +3,7 @@ services:
     image: mcp-proxy:dev
     build:
       context: ../../..
-    entrypoint: ["bun", "run", "test/mocks/bearer-mock.ts"]
+    entrypoint: ["node", "test/mocks/bearer-mock.ts"]
     environment:
       BEARER_TOKEN: backend-secret
       PORT: "3000"
@@ -13,8 +13,7 @@ services:
     build:
       context: ../../..
     entrypoint:
-      - bun
-      - run
+      - node
       - src/index.ts
       - --listen
       - 0.0.0.0:8000
@@ -33,7 +32,7 @@ services:
   # echo の smoke.test.ts (PROXY_URL を差し替えるだけ) を流用する。
   bearer-smoke:
     image: mcp-proxy:dev
-    entrypoint: ["bun", "test", "test/smoke/echo/smoke.test.ts"]
+    entrypoint: ["node", "--test", "test/smoke/echo/smoke.test.ts"]
     environment:
       PROXY_URL: http://bearer-proxy:8000/mcp
       PROXY_TOKEN: testtoken

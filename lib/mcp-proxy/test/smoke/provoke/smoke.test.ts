@@ -5,7 +5,8 @@
 //   - notifications/tools/list_changed が proxy 経由で client の notification handler に届くこと
 // を確認する。
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { after, before, describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
@@ -13,8 +14,8 @@ import {
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const url = Bun.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
-const token = Bun.env["PROXY_TOKEN"];
+const url = process.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
+const token = process.env["PROXY_TOKEN"];
 
 const SAMPLING_REPLY = "from-client-handler";
 
@@ -48,7 +49,7 @@ async function connectClient(signal: ToolListChangedSignal): Promise<Client> {
       return c;
     } catch (e) {
       lastErr = e;
-      await Bun.sleep(500);
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -58,24 +59,28 @@ describe("mcp-proxy server-initiated forwarding", () => {
   let client: Client;
   const signal: ToolListChangedSignal = { received: false };
 
-  beforeAll(async () => {
+  before(async () => {
     client = await connectClient(signal);
-  }, 30_000);
+  }, { timeout: 30_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await client.close();
   });
 
-  test("server-initiated request (sampling/createMessage) が front の handler で処理される", async () => {
-    const res = await client.callTool({ name: "provoke", arguments: {} }, undefined, {
-      timeout: 10_000,
-    });
-    const content = res.content as Array<{ type: string; text?: string }>;
-    const text = content[0]?.text ?? "";
-    expect(text).toContain(SAMPLING_REPLY);
-  }, 15_000);
+  test(
+    "server-initiated request (sampling/createMessage) が front の handler で処理される",
+    { timeout: 15_000 },
+    async () => {
+      const res = await client.callTool({ name: "provoke", arguments: {} }, undefined, {
+        timeout: 10_000,
+      });
+      const content = res.content as Array<{ type: string; text?: string }>;
+      const text = content[0]?.text ?? "";
+      assert.ok(text.includes(SAMPLING_REPLY));
+    },
+  );
 
   test("server-initiated notification (tools/list_changed) が front の handler に届く", () => {
-    expect(signal.received).toBe(true);
+    assert.equal(signal.received, true);
   });
 });

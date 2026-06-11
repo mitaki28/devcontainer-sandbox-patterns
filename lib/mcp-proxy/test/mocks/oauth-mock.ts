@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 // OAuth 2.1 + DCR 認証サーバ + Bearer 保護された MCP backend のモック。
 // SDK の mcpAuthRouter / requireBearerAuth と OAuthServerProvider interface を
 // in-memory で実装している（参考: examples/server/demoInMemoryOAuthProvider）。
@@ -26,8 +25,8 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { z } from "zod/v4";
 
-const PORT = Number(Bun.env["PORT"] ?? "3000");
-const ISSUER = Bun.env["ISSUER_URL"] ?? `http://localhost:${String(PORT)}`;
+const PORT = Number(process.env["PORT"] ?? "3000");
+const ISSUER = process.env["ISSUER_URL"] ?? `http://localhost:${String(PORT)}`;
 
 class InMemoryClientsStore implements OAuthRegisteredClientsStore {
   private clients = new Map<string, OAuthClientInformationFull>();

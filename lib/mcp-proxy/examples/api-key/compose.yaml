@@ -2,8 +2,7 @@ services:
   proxy:
     build:
       context: ../..
-      dockerfile: Dockerfile.binary
-    image: mcp-proxy:bin
+    image: mcp-proxy:dev
     # ホストから手動で curl 等で叩くための公開（smoke 自体には不要）。
     # localhost bind なので外部ホストからは到達しない。
     ports:
@@ -29,7 +28,7 @@ services:
     #   push_*     : push_files
     command:
       - >
-        exec mcp-proxy --listen 0.0.0.0:8000 -t http
+        exec node src/index.ts --listen 0.0.0.0:8000 -t http
         --token "$$PROXY_TOKEN"
         -H "Authorization: Bearer $$GITHUB_PAT"
         --deny-tool 'delete_*'
@@ -41,7 +40,7 @@ services:
     image: mcp-proxy:dev
     build:
       context: ../..
-    entrypoint: ["bun", "test", "test-recipes/github-smoke.test.ts"]
+    entrypoint: ["node", "--test", "test-recipes/github-smoke.test.ts"]
     environment:
       PROXY_URL: http://proxy:8000/mcp
     # PROXY_TOKEN を smoke クライアントへ。proxy と同じ値を読む。

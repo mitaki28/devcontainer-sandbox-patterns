@@ -2,7 +2,7 @@
 
 devcontainer から MCP の認証情報をバインドマウントから切り離すため、1 つのバックエンド MCP を中継するプロキシ。クライアント (Claude Code 等) からは streamable-HTTP MCP として見え、背後で 1 つのバックエンド MCP (stdio もしくは streamable-HTTP) を起動して中継する。
 
-[`lib/mitm-proxy/`](../mitm-proxy/) と対になる「2 軸構成のもう片方」で、recipes/ から build context 経由で再利用される基本コンポーネント。実装は TypeScript + Bun + `@modelcontextprotocol/sdk`。
+[`lib/mitm-proxy/`](../mitm-proxy/) と対になる「2 軸構成のもう片方」で、recipes/ から build context 経由で再利用される基本コンポーネント。実装は TypeScript + Node + `@modelcontextprotocol/sdk`。
 
 ## 利用例 (examples/)
 
@@ -11,16 +11,15 @@ mcp-proxy を 1 つの MCP バックエンドに被せる典型パターンを `
 - [`examples/api-key/`](./examples/api-key/) — 事前発行の API キー (Bearer) 認証のバックエンドをプロキシ経由で隔離 (具体例: GitHub MCP)
 - [`examples/oauth/`](./examples/oauth/) — OAuth 2.1 + DCR 認証のバックエンドをプロキシ経由で隔離 (具体例: Atlassian Rovo MCP)
 
-いずれも build context として `lib/mcp-proxy/` (= `../..`) を取り、本 lib の `Dockerfile.binary` からバイナリを焼く。env_file の置き場・`.mcp.json` 形式等のレシピレベルの整合は両 example の README を参照。
+いずれも build context として `lib/mcp-proxy/` (= `../..`) を取り、本 lib の `Dockerfile` (`node:22-slim` ベース) からプロキシ image を build する。env_file の置き場・`.mcp.json` 形式等のレシピレベルの整合は両 example の README を参照。
 
 ## 動作確認 (smoke test)
 
-`compose.yaml` に 8 系統の smoke を用意している。いずれも実バックエンドに依存せず、リポジトリ内のモックだけで完結する。
+`compose.yaml` に 7 系統の smoke を用意している。いずれも実バックエンドに依存せず、リポジトリ内のモックだけで完結する。
 
 | 系統 | 検証内容 | コマンド |
 |---|---|---|
 | stdio | echo MCP (stdio) をプロキシで中継 | `docker compose run --rm --build smoke` |
-| binary | バイナリイメージ (`mcp-proxy:bin`) で stdio | `docker compose run --rm --build binary-smoke` |
 | bearer | Bearer 認証付き HTTP バックエンドをプロキシで中継 (mock = `test/mocks/bearer-mock.ts`) | `docker compose run --rm --build bearer-smoke` |
 | oauth | OAuth 2.1 + DCR バックエンドを `--oauth` で中継 (mock = `test/mocks/oauth-mock.ts`、テストハーネス が認可 URL を自動追従) | `docker compose run --rm --build oauth-smoke` |
 | oauth (dedup) | 同上 + `--oauth-refresh-dedup` を有効にして OAuth フロー / tools/list / tools/call が壊れないことを確認 | `docker compose run --rm --build oauth-smoke-dedup` |
@@ -28,31 +27,24 @@ mcp-proxy を 1 つの MCP バックエンドに被せる典型パターンを `
 | provoke | server-initiated notification + request を投げるバックエンド (`test/smoke/provoke/provoke-mcp.ts`) で、`sampling/createMessage` がフロント (クライアント) のハンドラで処理されて応答が tool result に戻ること + `tools/list_changed` がクライアントの notification ハンドラに届くことを確認 | `docker compose run --rm --build provoke-smoke` |
 | sweep | `--session-idle-timeout 2000` 付きで起動し、アイドル経過後に同 session id への POST が 404 を返すこと (セッションが解放されていること) を確認 | `docker compose run --rm --build sweep-smoke` |
 
-stdio / binary / bearer は SDK Client で 4 ケース (401 / 404 / `tools/list` / `tools/call`)。oauth は テストハーネス がプロキシを子プロセスで起動 → 認可 URL を fetch 追従 → コールバック完了 → `tools/list` + `tools/call` を検証する E2E。
+stdio / bearer は SDK Client で 4 ケース (401 / 404 / `tools/list` / `tools/call`)。oauth は テストハーネス がプロキシを子プロセスで起動 → 認可 URL を fetch 追従 → コールバック完了 → `tools/list` + `tools/call` を検証する E2E。
 
 各 smoke の compose 定義は `test/smoke/<name>/compose.yaml` に分離し、ルートの `compose.yaml` が include で集約する。全 smoke を順に回すには `bash scripts/smoke-all.sh` (pass/fail サマリを最後に出力)。
 
-`test/unit/` 配下は docker 不要の単体テストで、`bun test test/unit/` で回せる (フィルタ / oauth プロバイダ / コールバック / 起動引数 / env 受け渡しなど)。
+`test/unit/` 配下は docker 不要の単体テストで、`node --test test/unit/*.test.ts` で回せる (フィルタ / oauth プロバイダ / コールバック / 起動引数 / env 受け渡しなど)。
 
 手動デバッグ用に compose は次のサービスをポート公開している:
 
 | サービス | ホストポート | 用途 |
 |---|---|---|
 | `proxy` | `127.0.0.1:8800:8000` | プロキシへの手動 curl |
-| `proxy-binary` | `127.0.0.1:8801:8000` | バイナリ版への手動 curl |
 | `oauth-mock` | `127.0.0.1:3000:3000` | ブラウザから OAuth フローを手動で試す |
 
-## シングルバイナリのビルド
+## ランタイムと配布
 
-`bun build --compile` でプロキシを依存ごと埋め込んだシングルバイナリを生成できる。stdio バックエンドの言語ランタイム公式イメージ (`node:lts-slim`, `python:slim`, ...) にバイナリだけ COPY して 1 MCP 1 コンテナを組むのに使う。
+`Dockerfile` は `node:22-slim` (digest pin) をベースに `pnpm install --frozen-lockfile` で本体依存を導入し、`node src/index.ts` を ENTRYPOINT にする。非 root ユーザ (node, uid 1000) で実行する。トークンストアをバインドマウントする OAuth 構成では、host 側ディレクトリの所有 uid が 1000 と一致しない環境では書き込めないので、レシピの compose 側で `user:` を上書きする。
 
-```sh
-bun run build              # linux-x64 と linux-arm64 を dist/ に出力
-bun run build:linux-x64    # 個別
-bun run build:linux-arm64  # 個別
-```
-
-`Dockerfile.binary` は `oven/bun:1` (debian, glibc) でビルドし、`debian:trixie-slim` に `mcp-proxy` と `echo-mcp` のバイナリだけを COPY する最小構成。`Dockerfile` / `Dockerfile.binary` とも非 root ユーザ (uid 1000) で実行する。トークンストアをバインドマウントする OAuth 構成では、host 側ディレクトリの所有 uid が 1000 と一致しない環境では書き込めないので、レシピの compose 側で `user:` を上書きする。
+`pnpm-workspace.yaml` に `minimumReleaseAge: 10080` (= 7 日) と `blockExoticSubdeps: true` を設定し、サプライチェーン経由で新しいバージョンが install されるまでに猶予を作り、git: / file: 等の registry 外経路を塞ぐ。
 
 ## CLI オプション
 
@@ -131,7 +123,7 @@ docker run --rm \
   -p 127.0.0.1:8810:8000 \
   -p 127.0.0.1:3030:3030 \
   -v ~/.cache/devsbx/mcp-proxy:/data \
-  mcp-proxy:bin \
+  mcp-proxy:dev \
   --token "test-proxy-token" \
   -t http --oauth \
   --callback-listen 0.0.0.0:3030 \
@@ -153,7 +145,7 @@ docker run --rm \
 
 ### バックエンド中継の transport 構造
 
-`WebStandardStreamableHTTPServerTransport` を stateful モード (`sessionIdGenerator: () => crypto.randomUUID()`) で使い、**1 クライアントセッションにつき 1 バックエンドインスタンス** を起動する。セッションマップは `Map<sessionId, { front, backend, ... }>` で保持し、受信 HTTP リクエストは `mcp-session-id` ヘッダで lookup して既存 transport の `handleRequest` にディスパッチする。
+`StreamableHTTPServerTransport` を stateful モード (`sessionIdGenerator: () => crypto.randomUUID()`) で使い、**1 クライアントセッションにつき 1 バックエンドインスタンス** を起動する。セッションマップは `Map<sessionId, { front, backend, ... }>` で保持し、受信 HTTP リクエストは `mcp-session-id` ヘッダで lookup して既存 transport の `handleRequest` にディスパッチする。
 
 セッションのライフサイクル:
 
@@ -185,7 +177,7 @@ docker run --rm \
 
 ### OAuth フローとコールバック防御
 
-`--oauth` で起動時にバックエンドの DCR + 認可 + トークン永続化までを駆動する。`StreamableHTTPClientTransport.start()` は AbortController を作るだけで実通信しないため (最初の `send` まで認証チェックが走らない)、SDK の `auth()` 関数を直接呼ぶ。コールバックの HTTP サーバ停止は `setTimeout(200ms)` の遅延 + graceful な `server.stop()` (強制停止だとレスポンス送信前にソケットが close されてブラウザに `ERR_EMPTY_RESPONSE` が出る)。
+`--oauth` で起動時にバックエンドの DCR + 認可 + トークン永続化までを駆動する。`StreamableHTTPClientTransport.start()` は AbortController を作るだけで実通信しないため (最初の `send` まで認証チェックが走らない)、SDK の `auth()` 関数を直接呼ぶ。コールバックの HTTP サーバ停止は `setTimeout(200ms)` の遅延後に `server.close()` + `server.closeAllConnections()` を組み合わせる (遅延が無いとレスポンス送信前にソケットが close されてブラウザに `ERR_EMPTY_RESPONSE` が出る。keep-alive 接続が残ると `close()` だけでは shutdown が滞留するので `closeAllConnections()` で強制クリーンアップする)。
 
 `FileOAuthProvider` はプロキシ寿命で 1 つ作り、全セッションのバックエンド transport で共有する。プロキシ起動時に `runOAuthFlow` を 1 回駆動して AUTHORIZED まで進めておくことで、最初のセッション起動時に初めて認可 URL が出る UX を避け、複数セッションが同時に立ち上がっても認可フローが並走しない。`state.txt` / `verifier.txt` 等の短寿命の state も書き込み経路が 1 つに固定される。セッション中の自動リフレッシュは SDK の transport 側に任せる (各 transport が共有プロバイダの `tokens()` / `saveTokens()` を呼ぶ)。
 

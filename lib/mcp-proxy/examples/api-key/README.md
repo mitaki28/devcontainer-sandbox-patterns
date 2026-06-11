@@ -23,7 +23,7 @@ lib/mcp-proxy/examples/api-key/
 
 実値を入れた env ファイルはレシピディレクトリ外 (`~/.config/devsbx/mcp-github.env`) に配置する。`compose.yaml` の `env_file` がこの絶対パスを直接参照する。作業コンテナのバインドマウント (`.:/workspace`) からは分離される。
 
-`compose.yaml` の `proxy` サービスは [`lib/mcp-proxy/Dockerfile.binary`](../../Dockerfile.binary) を `build.context: ../../../lib/mcp-proxy` で参照し、`mcp-proxy:bin` として立ち上がる。
+`compose.yaml` の `proxy` サービスは [`lib/mcp-proxy/Dockerfile`](../../Dockerfile) を `build.context: ../../../lib/mcp-proxy` で参照し、`mcp-proxy:dev` として立ち上がる。
 
 ## 使い方
 
@@ -110,7 +110,7 @@ curl -s -X POST \
 mcp-proxy 本体の README ([`../../README.md`](../../README.md)) を参照。本レシピに固有の点:
 
 1. **PAT 範囲が広いとプロキシ経由で全部使える**: 作業コンテナに居られる攻撃者は PAT スコープ内の任意 GitHub 操作が可能。緩和策: PAT を「該当リポジトリのみ + Metadata Read-only」等に絞る
-2. **プロキシのホストの localhost ポートは PROXY_TOKEN で保護されている**: `127.0.0.1:8810` にホスト上の他プロセスから到達可能 (外部ネットワークからは届かない)。Bearer 認証必須なのでトークンを知らない他プロセスは弾かれる。必要なら `compose.yaml` の `ports:` を消す (手動 curl デバッグはできなくなる)
+2. **プロキシのホストの localhost ポートは PROXY_TOKEN で保護されている**: `127.0.0.1:8810` にホスト上の他プロセスから到達可能 (外部ネットワークからは届かない)。Bearer 認証必須なのでトークンを知らない他プロセスは弾かれる
 3. **プロキシと GitHub MCP 間は HTTPS のみ**: GitHub 側の証明書検証で MITM は防げるが、プロキシのホスト OS が侵害された場合は突破される
 
 ## 関連

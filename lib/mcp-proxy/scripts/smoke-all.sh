@@ -12,7 +12,6 @@ set -euo pipefail
 
 SMOKES=(
   smoke
-  binary-smoke
   filter-smoke
   sweep-smoke
   provoke-smoke

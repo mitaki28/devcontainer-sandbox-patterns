@@ -7,7 +7,7 @@
 #   cd shared-infra && docker compose -p devsbx-infra up -d
 #
 # `devsbx-shared` network を `external: true + name:` で参照しているため、shared-infra 不在では
-# 起動 fail する (これは fail-fast で良い挙動)。
+# 起動 fail する (これは起動時点で失敗するのが妥当な挙動)。
 #
 # 各 task で独立した内部 network (`<task>_internal`) は compose default 命名で
 # 自動的に切り出される (per-stack の egress 遮断)。

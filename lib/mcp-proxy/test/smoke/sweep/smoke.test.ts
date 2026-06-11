@@ -3,12 +3,13 @@
 // 何もせずに sweep interval (5 秒) + idle timeout (2 秒) を超えて待ったあとで、
 // 同じ session id 宛の POST が 404 を返すことを確認する。
 
-import { describe, expect, test } from "bun:test";
+import { describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const url = Bun.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
-const token = Bun.env["PROXY_TOKEN"];
+const url = process.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
+const token = process.env["PROXY_TOKEN"];
 
 async function connectClient(): Promise<Client> {
   let lastErr: unknown;
@@ -22,24 +23,24 @@ async function connectClient(): Promise<Client> {
       return c;
     } catch (e) {
       lastErr = e;
-      await Bun.sleep(500);
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 describe("mcp-proxy session idle sweep", () => {
-  test("idle timeout を超えた session id への POST は 404 を返す", async () => {
+  test("idle timeout を超えた session id への POST は 404 を返す", { timeout: 30_000 }, async () => {
     const client = await connectClient();
     // SDK Client は transport.sessionId を直接公開しないため、内部 transport を見る。
     // sweep の挙動を生 fetch で確認するために raw session id が要る。
     const sessionId = (
       client as unknown as { _transport?: { sessionId?: string } }
     )._transport?.sessionId;
-    expect(sessionId).toBeDefined();
+    assert.notEqual(sessionId, undefined);
 
     // sweep interval (5s) + idle timeout (2s) を超えて待つ
-    await Bun.sleep(8000);
+    await new Promise((r) => setTimeout(r, 8000));
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -58,10 +59,10 @@ describe("mcp-proxy session idle sweep", () => {
         params: {},
       }),
     });
-    expect(res.status).toBe(404);
+    assert.equal(res.status, 404);
 
     await client.close().catch(() => {
       // sweep 後はもう session が無いので close は失敗してよい
     });
-  }, 30_000);
+  });
 });

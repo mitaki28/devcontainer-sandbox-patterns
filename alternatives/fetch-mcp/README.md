@@ -2,7 +2,7 @@
 
 任意 URL の fetch 機能を **作業コンテナ外側の自前 MCP** として提供し、組み込み `WebFetch` を `permissions.deny` で無効化した上でその機能を限定的に復活させる試作。特化 MCP (Context7 / GitHub MCP / DeepWiki 等) で賄えない「未知 URL の調査」用途 (一般のブログ / Stack Overflow 回答 / 新規技術記事等) を補おうとしたもの。
 
-本書の安全性モデル (境界の上流が信頼でき限定列挙されている) と任意ホスト fetch は構造的に相容れないため、本レシピは **未完成扱い** として保持している。採用判断のトレードオフ (プロンプトインジェクションによる攻撃面拡大 / 内部情報の外部流出経路の新設 / 応答品質の低下) と「別の保証の枠組みが要る」議論は docs 付録で扱う:
+本書の前提と保証 (境界の上流が信頼でき限定列挙されている) と任意ホスト fetch は構造的に相容れないため、本レシピは **未完成扱い** として保持している。採用判断のトレードオフ (プロンプトインジェクションによる攻撃面拡大 / 内部情報の外部流出経路の新設 / 応答品質の低下) と「別の保証の枠組みが要る」議論は docs 付録で扱う:
 
 - [docs/appendix/incomplete-fetch-mcp.md](../../docs/appendix/incomplete-fetch-mcp.md) — 任意ホスト fetch の構造的限界と「未完成」判断の根拠
 
@@ -19,8 +19,8 @@ alternatives/fetch-mcp/
 │   └── devcontainer.json
 ├── Dockerfile
 ├── package.json
-├── bun.lock
-├── bunfig.toml                   # minimumReleaseAge=604800 (7 日下限)
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml           # minimumReleaseAge=10080 (7 日下限) / blockExoticSubdeps=true
 ├── tsconfig.json
 ├── src/                          # 自前 fetch MCP 本体
 │   ├── index.ts                  # MCP HTTP サーバ + fetch ツール
@@ -30,7 +30,7 @@ alternatives/fetch-mcp/
 └── test/
     ├── fetcher.test.ts           # ユニットテスト
     ├── filter.test.ts            # ユニットテスト
-    ├── mcp-smoke.test.ts         # 結合テスト (ホスト Bun)
+    ├── mcp-smoke.test.ts         # 結合テスト
     ├── sanitize.test.ts          # ユニットテスト
     └── fetch-smoke.test.ts       # docker compose 経由 E2E smoke
 ```

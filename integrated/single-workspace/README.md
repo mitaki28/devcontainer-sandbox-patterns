@@ -88,7 +88,7 @@ integrated/single-workspace/
 
 `compose.yaml` の各 build context は他コンポーネントを直接参照する:
 
-- `mcp-github-proxy` / `mcp-atlassian-proxy` / `mcp-context7-proxy`: `../../lib/mcp-proxy` の `Dockerfile.binary`
+- `mcp-github-proxy` / `mcp-atlassian-proxy` / `mcp-context7-proxy`: `../../lib/mcp-proxy` の `Dockerfile` (`node:22-slim` ベース、`node src/index.ts` で起動)
 - `mitmproxy`: `mitmproxy/mitmproxy` 公式イメージを直使用 (digest ピン、ビルドなし)。アドオンは `../../lib/mitm-proxy/addons` をバインドマウント、policy はレシピ固有の `./policy.json` をバインドマウント
 - `git-gateway`: `../../recipes/git-gateway/gateway/` (Caddy + fcgiwrap + git-http-backend + 独自フック)。作業コンテナの gitconfig insteadOf で github.com → `git-gateway:8080` に書き換わる
 - `ingress`: 本レシピ直下の `./ingress/` (`caddy:2-alpine` の digest ピン + Caddyfile)
@@ -309,7 +309,7 @@ pnpm install --frozen-lockfile=false # lockfile 更新が必要な場合
 
 `registry.npmjs.org` への GET (metadata + tarball) は mitmproxy の読み取り専用許可で通る。一方 `pnpm publish` のような POST / PUT はアドオンが 403 で拒否する **明確な境界** として効く。CI/CD の trusted publishing や別途認証付きの publish 経路に集約する想定。
 
-AI エージェントから `pnpm add` を直接叩けるが、publish 系がポリシーで塞がれているため書き込み系の事故面は小さい。実行時の外向き通信を経路レベルでゼロにしたい脅威モデル向けには [`alternatives/dependencies-build-time/`](../../alternatives/dependencies-build-time/) のビルド時インストールパターンが別途使える (本レシピとは別軸)。
+AI エージェントから `pnpm add` を直接叩けるが、publish 系がポリシーで塞がれているため書き込み系の事故面は小さい。実行時の外向き通信を経路レベルでゼロにしたい場合は [`alternatives/dependencies-build-time/`](../../alternatives/dependencies-build-time/) のビルド時インストールパターンが別途使える (本レシピとは別軸)。
 
 ## 隔離されているもの
 
@@ -340,7 +340,7 @@ AI エージェントから `pnpm add` を直接叩けるが、publish 系がポ
 
 ## 既知の制約
 
-- **初回 OAuth 認可時のみ `127.0.0.1:3030` をホストから参照する** ため、これだけは mitmproxy / internal ネットワークの枠外にある。認可完了後は使わない (必要なら ports 設定を消してよい)
+- **初回 OAuth 認可時のみ `127.0.0.1:3030` をホストから参照する** ため、これだけは mitmproxy / internal ネットワークの枠外にある。認可完了後は使わない
 - **リバースプロキシの `127.0.0.1:8080` も同様にホストへのポート公開が必要**。開発サーバをホストブラウザから見るためのインバウンド経路。並列起動非対応 (並列起動が要るなら `integrated/multi-workspace/` を使う)
 - **作業コンテナのイメージは `mcr.microsoft.com/devcontainers/javascript-node:22-trixie`**。他言語ベースが必要ならレシピを fork する形
 - **CA 証明書を OS のトラストストアでなく自前のバンドルで読むツール** (Java の `cacerts.jks`、AWS CLI の `AWS_CA_BUNDLE` 等) は、作業コンテナの Dockerfile に追加の環境変数が必要になる場合あり。本レシピでは Node / Python / pip / cargo / git の環境変数を一通りセット済み

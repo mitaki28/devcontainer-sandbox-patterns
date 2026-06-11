@@ -5,7 +5,8 @@
 // README の「漏れる余地 / 限界」および docs 付録「proxy 層と CDN 層の責任分担」
 // を参照。
 
-import { describe, expect, it } from "bun:test";
+import { describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { Socket } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 
@@ -68,31 +69,27 @@ async function tlsHandshakeViaProxy(
 }
 
 describe("alternatives/simple-http-proxy smoke (Squid + Docker internal network)", () => {
-  it("allowed host (mock-target.test) is reachable through the proxy", async () => {
-    const res = await fetch("https://mock-target.test/", {
-      proxy: PROXY,
-    });
-    expect(res.status).toBe(200);
+  test("allowed host (mock-target.test) is reachable through the proxy", async () => {
+    const res = await fetch("https://mock-target.test/");
+    assert.equal(res.status, 200);
     const body = await res.text();
-    expect(body.length).toBeGreaterThan(0);
+    assert.ok(body.length > 0);
   });
 
-  it("disallowed host (example.com) is denied by the proxy", async () => {
+  test("disallowed host (example.com) is denied by the proxy", async () => {
     let denied = false;
     try {
-      const res = await fetch("https://example.com/", {
-        proxy: PROXY,
-      });
+      const res = await fetch("https://example.com/");
       // ssl_bump terminate / http_access deny の場合、Squid は 4xx を返すか
       // TCP を切る。前者なら status を見る、後者なら fetch 自体が throw する。
       denied = res.status >= 400;
     } catch {
       denied = true;
     }
-    expect(denied).toBe(true);
+    assert.equal(denied, true);
   });
 
-  it("direct TCP egress to external IP fails (internal: true)", async () => {
+  test("direct TCP egress to external IP fails (internal: true)", async () => {
     // 外部 IP に直接 TCP connect。proxy を経由せず、Docker network の
     // routing table に外部経路が無いため ENETUNREACH 相当で失敗する。
     // hostname ではなく IP を直接指定して、DNS の有無に依存しない検証にする。
@@ -120,7 +117,7 @@ describe("alternatives/simple-http-proxy smoke (Squid + Docker internal network)
     });
   });
 
-  it("CONNECT spoofing (CONNECT mock-target.test + SNI evil.invalid) is terminated by ssl_bump", async () => {
+  test("CONNECT spoofing (CONNECT mock-target.test + SNI evil.invalid) is terminated by ssl_bump", async () => {
     // CONNECT 行 = allowlist 内 (mock-target.test) / SNI = allowlist 外
     // (evil.invalid) で詐称を仕掛け、ssl_bump terminate で切られることを検証。
     // smoke は本番 allowed-hosts.txt を smoke 用 (mock-target.test のみ) に
@@ -140,6 +137,6 @@ describe("alternatives/simple-http-proxy smoke (Squid + Docker internal network)
     } catch {
       denied = true;
     }
-    expect(denied).toBe(true);
+    assert.equal(denied, true);
   });
 });

@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 // Bearer 認証付き HTTP MCP backend のモック。
 // proxy が API key 認証 backend (GitHub MCP 等) を扱う動作確認用。
 // SDK の requireBearerAuth + StreamableHTTPServerTransport を使う最小実装。
@@ -15,8 +14,8 @@ import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/p
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod/v4";
 
-const TOKEN = Bun.env["BEARER_TOKEN"] ?? "secret-bearer-token";
-const PORT = Number(Bun.env["PORT"] ?? "3000");
+const TOKEN = process.env["BEARER_TOKEN"] ?? "secret-bearer-token";
+const PORT = Number(process.env["PORT"] ?? "3000");
 
 const verifier: OAuthTokenVerifier = {
   verifyAccessToken(token: string): Promise<AuthInfo> {

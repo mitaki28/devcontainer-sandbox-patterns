@@ -40,9 +40,9 @@ alternatives/simple-http-proxy/
 │   └── devcontainer.json  # 作業コンテナを devcontainer として起動
 └── test/
     ├── compose.yaml                 # smoke 専用スタック (proxy + mock-target + smoke)
-    ├── Dockerfile.mock              # mock-target イメージ (oven/bun:1 + openssl)
-    ├── mock-entrypoint.sh           # 起動時に自己署名証明書を生成 → Bun.serve 起動
-    ├── mock-server.ts               # Bun.serve で 443 TLS リスナー
+    ├── Dockerfile.mock              # mock-target イメージ (node:22-slim + openssl)
+    ├── mock-entrypoint.sh           # 起動時に自己署名証明書を生成 → node /app/mock-server.ts 起動
+    ├── mock-server.ts               # node:https.createServer で 443 TLS リスナー
     ├── allowed-hosts.smoke.txt      # smoke 用の許可リスト (mock-target.test のみ)
     └── network-smoke.test.ts        # 4 ケース
 ```
@@ -74,7 +74,7 @@ VS Code / Cursor で `alternatives/simple-http-proxy/` を開き「Reopen in Con
 
 - 作業コンテナを Docker の internal ネットワークに閉じ込めている限り、作業コンテナ内の root であっても外部 IP に直接ソケットを開けない
 - 漏れるのはプロキシ経由で許可された通信だけ
-- 「カーネルの脆弱性 / docker socket への不正アクセスで netns を抜けられる」脅威モデルは **本レシピのスコープ外**
+- 「カーネルの脆弱性 / docker socket への不正アクセスで netns を抜けられる」ケースは **本レシピのスコープ外**
 
 devcontainer を使うこと自体が docker のセキュリティ前提に乗っているため、ここに信頼境界を置くのが自然。少数の前提を明示して上に積む方が、限界が分かりやすい。
 

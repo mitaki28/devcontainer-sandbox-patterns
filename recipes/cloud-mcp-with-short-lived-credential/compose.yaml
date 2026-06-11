@@ -3,7 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: recipes/cloud-mcp-with-short-lived-credential/Dockerfile.gcloud-mcp
-    image: gcp-mcp-proxy:bin
+    image: gcp-mcp-proxy:dev
     ports:
       - "127.0.0.1:8821:8000"
     env_file:
@@ -30,25 +30,27 @@ services:
       # （二重 impersonation 防止）。IMPERSONATE_SERVICE_ACCOUNT は env_file 由来で
       # proxy の env には入るが、--pass-env に挙げないため backend には渡らない。
       CLOUDSDK_AUTH_ACCESS_TOKEN_FILE: /tokens/token
-    working_dir: /opt/gcp-mcp
+    working_dir: /app
     # PROXY_TOKEN を引数に展開するため shell 経由で起動。
     # mcp-proxy は stdio backend に proxy の env を丸ごと渡さない (PROXY_TOKEN 等の
     # 漏洩防止)。gcloud-mcp が必要とする GCP 系 env だけを --pass-env で明示的に通す。
+    # backend の gcloud-mcp は /opt/gcp-mcp 配下に install されているため、
+    # `pnpm --dir` で別 cwd の package.json を経由して起動する。
     entrypoint: ["/bin/sh", "-c", "--"]
     command:
       - >
-        exec mcp-proxy --listen 0.0.0.0:8000
+        exec node src/index.ts --listen 0.0.0.0:8000
         --token "$$PROXY_TOKEN"
         --pass-env GOOGLE_CLOUD_PROJECT
         --pass-env CLOUDSDK_CORE_PROJECT
         --pass-env CLOUDSDK_AUTH_ACCESS_TOKEN_FILE
-        gcloud -- pnpm exec gcloud-mcp
+        gcloud -- pnpm --dir /opt/gcp-mcp exec gcloud-mcp
 
   smoke:
     image: mcp-proxy:dev
     build:
       context: ../../lib/mcp-proxy
-    entrypoint: ["bun", "test", "test-recipes/smoke.test.ts"]
+    entrypoint: ["node", "--test", "test-recipes/smoke.test.ts"]
     environment:
       PROXY_URL: http://proxy:8000/mcp
     env_file:

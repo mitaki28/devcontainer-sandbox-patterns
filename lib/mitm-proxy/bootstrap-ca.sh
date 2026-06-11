@@ -12,9 +12,9 @@
 #   を書き換えるため)。CA install 完了後、setpriv で `WORKLOAD_USER` に uid を drop
 #   してから CMD を exec する。
 #   `WORKLOAD_USER` は呼び出し側 (Dockerfile / compose env) で **明示必須**
-#   (`${WORKLOAD_USER:?}` で fail-fast)。default を持たせると base image ごとに
-#   実在する user が異なる (bun / node / 等) ため、漏れに気付かず privilege drop が
-#   壊れたまま動く事故を起こしやすい (lib/mitm-proxy は bun, devcontainers 系は node)。
+#   (`${WORKLOAD_USER:?}` で未指定なら起動拒否)。default を持たせると base image ごとに
+#   実在する user が異なるため、漏れに気付かず privilege drop が壊れたまま動く
+#   事故を起こしやすい (lib/mitm-proxy は node, 他の base image では別 user)。
 
 set -eu
 
@@ -46,13 +46,13 @@ echo "[bootstrap-ca] CA installed: $CA_DST (combined bundle: $SSL_CERT_FILE)"
 
 # Drop privileges before exec'ing the workload command.
 # 呼び出し側で必ず指定する (例: Dockerfile の `ENV WORKLOAD_USER=node`)。
-WORKLOAD_USER="${WORKLOAD_USER:?WORKLOAD_USER must be set (e.g. node, bun) — set it in the Dockerfile ENV or compose environment}"
+WORKLOAD_USER="${WORKLOAD_USER:?WORKLOAD_USER must be set (e.g. node) — set it in the Dockerfile ENV or compose environment}"
 WORKLOAD_UID=$(id -u "$WORKLOAD_USER")
 WORKLOAD_GID=$(id -g "$WORKLOAD_USER")
 WORKLOAD_HOME=$(getent passwd "$WORKLOAD_USER" | cut -d: -f6)
 : "${WORKLOAD_HOME:?cannot resolve home for $WORKLOAD_USER}"
 echo "[bootstrap-ca] dropping privileges to $WORKLOAD_USER (uid=$WORKLOAD_UID gid=$WORKLOAD_GID home=$WORKLOAD_HOME)"
-# HOME / USER を明示再設定 (root 時の HOME=/root のままだと bun cache 等が書けない)。
+# HOME / USER を明示再設定 (root 時の HOME=/root のままだと npm キャッシュ等が書けない)。
 # setpriv --init-groups で supplementary groups も初期化。
 exec env HOME="$WORKLOAD_HOME" USER="$WORKLOAD_USER" LOGNAME="$WORKLOAD_USER" \
     setpriv --reuid="$WORKLOAD_UID" --regid="$WORKLOAD_GID" --init-groups -- "$@"

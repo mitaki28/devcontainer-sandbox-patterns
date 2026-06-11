@@ -3,7 +3,7 @@ services:
     image: mcp-proxy:dev
     build:
       context: ../../..
-    entrypoint: ["bun", "run", "test/mocks/oauth-mock.ts"]
+    entrypoint: ["node", "test/mocks/oauth-mock.ts"]
     environment:
       PORT: "3000"
       # compose 内 service hostname。proxy が backend として叩く URL の origin。
@@ -19,7 +19,7 @@ services:
     image: mcp-proxy:dev
     build:
       context: ../../..
-    entrypoint: ["bun", "run", "test/smoke/oauth/harness.ts"]
+    entrypoint: ["node", "test/smoke/oauth/harness.ts"]
     environment:
       OAUTH_BACKEND: http://oauth-mock:3000/mcp
     depends_on:
@@ -31,7 +31,7 @@ services:
     image: mcp-proxy:dev
     build:
       context: ../../..
-    entrypoint: ["bun", "run", "test/smoke/oauth/harness.ts"]
+    entrypoint: ["node", "test/smoke/oauth/harness.ts"]
     environment:
       OAUTH_BACKEND: http://oauth-mock:3000/mcp
       OAUTH_REFRESH_DEDUP: "1"

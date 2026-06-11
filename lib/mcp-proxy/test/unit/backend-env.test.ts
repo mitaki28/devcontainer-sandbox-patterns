@@ -1,7 +1,8 @@
 // buildBackendEnv の純粋ユニットテスト。
 // stdio backend に proxy の env が丸ごと漏れないことを確認する。
 
-import { describe, expect, test } from "bun:test";
+import { describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { buildBackendEnv } from "../../src/index.ts";
 
 describe("buildBackendEnv", () => {
@@ -21,17 +22,17 @@ describe("buildBackendEnv", () => {
 
   test("allowlist の env だけ継承し、それ以外 (秘匿情報含む) は渡さない", () => {
     const env = buildBackendEnv(source, [], {});
-    expect(env["PATH"]).toBe("/usr/bin:/bin");
-    expect(env["HOME"]).toBe("/home/mcpproxy");
-    expect(env["LANG"]).toBe("en_US.UTF-8");
+    assert.equal(env["PATH"], "/usr/bin:/bin");
+    assert.equal(env["HOME"], "/home/mcpproxy");
+    assert.equal(env["LANG"], "en_US.UTF-8");
     // LC_* は prefix で継承
-    expect(env["LC_ALL"]).toBe("C");
-    expect(env["LC_CTYPE"]).toBe("UTF-8");
+    assert.equal(env["LC_ALL"], "C");
+    assert.equal(env["LC_CTYPE"], "UTF-8");
     // proxy の秘匿情報・無関係な env は漏れない
-    expect(env["PROXY_TOKEN"]).toBeUndefined();
-    expect(env["GITHUB_PAT"]).toBeUndefined();
-    expect(env["CLOUDSDK_CORE_PROJECT"]).toBeUndefined();
-    expect(env["AWS_SECRET_ACCESS_KEY"]).toBeUndefined();
+    assert.equal(env["PROXY_TOKEN"], undefined);
+    assert.equal(env["GITHUB_PAT"], undefined);
+    assert.equal(env["CLOUDSDK_CORE_PROJECT"], undefined);
+    assert.equal(env["AWS_SECRET_ACCESS_KEY"], undefined);
   });
 
   test("--pass-env で明示したものだけ追加で継承する", () => {
@@ -40,17 +41,17 @@ describe("buildBackendEnv", () => {
       ["CLOUDSDK_CORE_PROJECT", "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"],
       {},
     );
-    expect(env["CLOUDSDK_CORE_PROJECT"]).toBe("my-project");
-    expect(env["CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"]).toBe("/tokens/token");
+    assert.equal(env["CLOUDSDK_CORE_PROJECT"], "my-project");
+    assert.equal(env["CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"], "/tokens/token");
     // pass-env に挙げていないものは依然として漏れない
-    expect(env["PROXY_TOKEN"]).toBeUndefined();
-    expect(env["GITHUB_PAT"]).toBeUndefined();
-    expect(env["AWS_SECRET_ACCESS_KEY"]).toBeUndefined();
+    assert.equal(env["PROXY_TOKEN"], undefined);
+    assert.equal(env["GITHUB_PAT"], undefined);
+    assert.equal(env["AWS_SECRET_ACCESS_KEY"], undefined);
   });
 
   test("--pass-env に存在しない key を挙げても無害 (undefined はスキップ)", () => {
     const env = buildBackendEnv(source, ["DOES_NOT_EXIST"], {});
-    expect(env["DOES_NOT_EXIST"]).toBeUndefined();
+    assert.equal(env["DOES_NOT_EXIST"], undefined);
   });
 
   test("--env で指定した値が最優先 (allowlist / pass-env を上書きできる)", () => {
@@ -59,14 +60,14 @@ describe("buildBackendEnv", () => {
       ["CLOUDSDK_CORE_PROJECT"],
       { CLOUDSDK_CORE_PROJECT: "override", CUSTOM_VAR: "explicit" },
     );
-    expect(env["CLOUDSDK_CORE_PROJECT"]).toBe("override");
-    expect(env["CUSTOM_VAR"]).toBe("explicit");
+    assert.equal(env["CLOUDSDK_CORE_PROJECT"], "override");
+    assert.equal(env["CUSTOM_VAR"], "explicit");
   });
 
   test("source に無い allowlist key はキーごと省かれる (undefined を入れない)", () => {
     const env = buildBackendEnv({ PATH: "/bin" }, [], {});
-    expect(env["PATH"]).toBe("/bin");
-    expect("HOME" in env).toBe(false);
-    expect("TERM" in env).toBe(false);
+    assert.equal(env["PATH"], "/bin");
+    assert.equal("HOME" in env, false);
+    assert.equal("TERM" in env, false);
   });
 });

@@ -2,8 +2,7 @@ services:
   proxy:
     build:
       context: ../..
-      dockerfile: Dockerfile.binary
-    image: mcp-proxy:bin
+    image: mcp-proxy:dev
     # localhost bind なので外部ホストからは到達しない。
     ports:
       - "127.0.0.1:8810:8000"
@@ -29,7 +28,7 @@ services:
     # 経由で host から 127.0.0.1:3030 を叩いても container の eth0 には届かない)。
     command:
       - >
-        exec mcp-proxy --listen 0.0.0.0:8000 -t http
+        exec node src/index.ts --listen 0.0.0.0:8000 -t http
         --token "$$PROXY_TOKEN"
         --oauth --callback-listen 0.0.0.0:3030 --token-store /data
         atlassian https://mcp.atlassian.com/v1/mcp/authv2

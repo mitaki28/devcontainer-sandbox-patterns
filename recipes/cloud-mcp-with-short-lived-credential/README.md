@@ -87,10 +87,10 @@ chmod 600 ~/.config/devsbx/gcp-mcp.env
 recipes/cloud-mcp-with-short-lived-credential/
 ├── compose.yaml              # proxy + smoke + workspace (refresher は持たない)
 ├── refresh-token.sh          # ホスト側で実行する SA トークンのリフレッシュ
-├── Dockerfile.gcloud-mcp     # gcp-mcp proxy イメージ (mcp-proxy:bin に gcloud-mcp を載せる)
+├── Dockerfile.gcloud-mcp     # gcp-mcp プロキシイメージ (gcr.io 経由の google-cloud-cli:slim + Node + mcp-proxy ソース + gcloud-mcp)
 ├── package.json              # gcloud-mcp のバージョンピン
 ├── pnpm-lock.yaml            # 推移依存のピン
-├── .npmrc                    # minimum-release-age / block-exotic-subdeps
+├── pnpm-workspace.yaml       # minimumReleaseAge / blockExoticSubdeps (pnpm install のサプライチェーン対策)
 ├── .env.example
 ├── .mcp.json
 ├── .devcontainer/devcontainer.json
@@ -182,22 +182,22 @@ curl -s -X POST \
 
 - **バージョンピン**: [`package.json`](./package.json) で `@google-cloud/gcloud-mcp` を厳密にピン
 - **lockfile ピン**: [`pnpm-lock.yaml`](./pnpm-lock.yaml) で推移依存も完全にピン。ビルドは `pnpm install --frozen-lockfile` で行い、AI エージェントがバージョンを勝手にずらせない
-- **minimum-release-age=10080**: 公開から 7 日経っていないバージョンは install できない (バージョン更新作業時の補助防御。[`./.npmrc`](./.npmrc) で推移依存含めて適用)
-- **block-exotic-subdeps=true**: 推移依存が git: / file: 経由でレジストリ外から引っ張るのを禁止
+- **minimumReleaseAge=10080**: 公開から 7 日経っていないバージョンは install できない (バージョン更新作業時の補助防御。[`./pnpm-workspace.yaml`](./pnpm-workspace.yaml) で推移依存含めて適用)
+- **blockExoticSubdeps=true**: 推移依存が git: / file: 経由でレジストリ外から引っ張るのを禁止
 - **ビルド時インストール**: 実行時は `pnpm exec gcloud-mcp` でローカルの node_modules から直起動。レジストリへの実行時ネット出し不要。`pnpm dlx` を実行時に使うと dlx 専用キャッシュの状態次第でネットワーク取得が走る場合があり、採用しない
 
 バージョン更新時は (1) npm 上の公開日が 7 日以上前であることを確認、(2) `package.json` のバージョンを更新、(3) コンテナ内で `pnpm install` を実行して `pnpm-lock.yaml` を再生成、(4) 差分をコミット、の順で行う。手元に pnpm が無くても以下で生成できる:
 
 ```sh
 docker run --rm -v "$PWD/recipes/cloud-mcp-with-short-lived-credential:/work" -w /work \
-  --entrypoint pnpm gcp-mcp-proxy:bin install --lockfile-only
+  --entrypoint pnpm gcp-mcp-proxy:dev install --lockfile-only
 ```
 
 ## 残存リスク (漏れる余地)
 
 1. **トークンの寿命中にプロキシが侵害されると、寿命残分の SA 操作が漏れる**: 影響範囲は sandbox SA の IAM スコープに閉じる。50 分のリフレッシュ周期だと最悪寿命 1h 弱 (アクセストークンは 1h、リフレッシュは 50 分後)
 2. **`refresh-token.sh` を回し忘れると寿命切れで API 呼び出しが 401**: 即座に検知できる (黙って古いトークンを使い続けることはない)。自動化 (cron / timer) を使うか、devcontainer 起動フックで都度実行する運用が現実的
-3. **ホスト側の `~/.cache/devsbx/gcp-mcp/token` が他プロセスから読める可能性**: `chmod 700 dir / 600 file` をスクリプト内で適用しているが、ホストが侵害されれば突破される。本レシピが前提とする脅威モデルは「ホストは信頼できる、コンテナはしない」
+3. **ホスト側の `~/.cache/devsbx/gcp-mcp/token` が他プロセスから読める可能性**: `chmod 700 dir / 600 file` をスクリプト内で適用しているが、ホストが侵害されれば突破される。本レシピは「ホストは信頼できる、コンテナはしない」を信頼の前提として置く
 4. **`refresh-token.sh` はホスト側 gcloud CLI に依存**: gcloud SDK が無い環境向けの派生は本レシピでは扱わない (シンプル優先)
 5. **gcloud-mcp の API surface に乗っていない GCP API は触れない**: これが本レシピの「読み取り中心」の根拠でもある (surface が狭い = 安全)。副作用: `terraform apply` のような IaC 操作はこのレシピでは不可
 6. **gcloud-mcp 側のバグで「読み取りのつもりが書き込んだ」可能性**: sandbox SA に書き込み権限を付けない限り IAM 段で止まる (多層防御)

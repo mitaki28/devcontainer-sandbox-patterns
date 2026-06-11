@@ -1,13 +1,14 @@
 // docker compose 経由で起動した filter-proxy（multi-tool-mcp + --deny-tool delete_*）
 // に接続し、tools/list 絞り込み + tools/call 拒否が end-to-end で効くことを確認する。
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { after, before, describe, test } from "node:test";
+import * as assert from "node:assert/strict";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const url = Bun.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
-const token = Bun.env["PROXY_TOKEN"];
+const url = process.env["PROXY_URL"] ?? "http://localhost:8000/mcp";
+const token = process.env["PROXY_TOKEN"];
 
 async function connectClient(): Promise<Client> {
   let lastErr: unknown;
@@ -21,7 +22,7 @@ async function connectClient(): Promise<Client> {
       return c;
     } catch (e) {
       lastErr = e;
-      await Bun.sleep(500);
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -30,27 +31,27 @@ async function connectClient(): Promise<Client> {
 describe("mcp-proxy filter smoke (deny=delete_*)", () => {
   let client: Client;
 
-  beforeAll(async () => {
+  before(async () => {
     client = await connectClient();
-  }, 30_000);
+  }, { timeout: 30_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await client.close();
   });
 
   test("tools/list は denied tool を含まない", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
-    expect(names).toContain("read_file");
-    expect(names).toContain("write_file");
-    expect(names).toContain("ping");
-    expect(names).not.toContain("delete_file");
+    assert.ok(names.includes("read_file"));
+    assert.ok(names.includes("write_file"));
+    assert.ok(names.includes("ping"));
+    assert.ok(!names.includes("delete_file"));
   });
 
   test("許可されている tool は呼べる", async () => {
     const res = await client.callTool({ name: "read_file", arguments: { msg: "hello" } });
     const content = res.content as Array<{ type: string; text?: string }>;
-    expect(content[0]?.text).toBe("read_file: hello");
+    assert.equal(content[0]?.text, "read_file: hello");
   });
 
   test("拒否された tool 呼び出しは JSON-RPC error -32601 を返す", async () => {
@@ -60,9 +61,9 @@ describe("mcp-proxy filter smoke (deny=delete_*)", () => {
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeInstanceOf(McpError);
-    const err = caught as McpError;
-    expect(err.code).toBe(-32601);
-    expect(err.message).toContain("delete_file");
+    assert.ok(caught instanceof McpError);
+    const err = caught;
+    assert.equal(err.code, -32601);
+    assert.ok(err.message.includes("delete_file"));
   });
 });

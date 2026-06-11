@@ -14,7 +14,7 @@ services:
     build:
       context: .
     image: fetch-mcp:dev
-    entrypoint: ["bun", "test", "test/fetch-smoke.test.ts"]
+    entrypoint: ["node", "--test", "test/fetch-smoke.test.ts"]
     environment:
       MCP_URL: http://fetch-mcp:8000/mcp
     volumes:

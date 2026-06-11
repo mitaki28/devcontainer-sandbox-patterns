@@ -1,6 +1,7 @@
-#!/usr/bin/env bun
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { checkUrl } from "./filter.ts";
 import { fetchAndProcess, type FetchSuccess } from "./fetcher.ts";
@@ -154,29 +155,33 @@ export function parseListenAddr(addr: string): ListenAddr {
   return { hostname, port };
 }
 
-export function startHttpServer(addr: ListenAddr): ReturnType<typeof Bun.serve> {
-  return Bun.serve({
-    hostname: addr.hostname,
-    port: addr.port,
-    // SDK の stateless StreamableHTTP パターンに従い、per-request に
-    // McpServer + transport を new する。McpServer.connect は同じ
-    // インスタンスでは 2 回呼べないため、server も使い捨てにする。
-    // tool 定義は registerTool 経由で毎 request 再構築されるが、軽量。
-    fetch: async (req: Request) => {
-      if (new URL(req.url).pathname !== "/mcp") {
-        return new Response("Not Found", { status: 404 });
-      }
-      const server = createServer();
-      const transport = new WebStandardStreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-      });
-      await server.connect(transport);
-      return await transport.handleRequest(req);
-    },
+export function startHttpServer(addr: ListenAddr): ReturnType<typeof createHttpServer> {
+  // SDK の stateless StreamableHTTP パターンに従い、per-request に
+  // McpServer + transport を new する。McpServer.connect は同じ
+  // インスタンスでは 2 回呼べないため、server も使い捨てにする。
+  // tool 定義は registerTool 経由で毎 request 再構築されるが、軽量。
+  const server = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    if (url.pathname !== "/mcp") {
+      res.writeHead(404).end("Not Found");
+      return;
+    }
+    const mcpServer = createServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res);
   });
+  // SSE の long-lived stream を request / headers timeout で打ち切らないよう無効化する。
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.listen(addr.port, addr.hostname);
+  return server;
 }
 
-if (import.meta.main) {
+const entryPath = process.argv[1];
+if (entryPath !== undefined && import.meta.url === pathToFileURL(entryPath).href) {
   const addr = parseListenAddr(process.env["FETCH_MCP_LISTEN"] ?? "0.0.0.0:8000");
   startHttpServer(addr);
   console.error(`fetch-mcp listening on ${addr.hostname}:${addr.port}/mcp`);
